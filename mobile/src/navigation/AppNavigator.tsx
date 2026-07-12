@@ -9,7 +9,10 @@ import ReviewScreen from '../screens/ReviewScreen';
 export type RootStackParamList = {
   Capture: undefined;
   /** Phase 1: Review receives the local temp URI of the captured photo. */
-  Review: { imageUri: string };
+  Review: {
+    imageUri: string;
+    roi?: { x: number; y: number; w: number; h: number };
+  };
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();

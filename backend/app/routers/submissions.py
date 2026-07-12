@@ -14,7 +14,7 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 
 from app.models.schemas import SubmissionRecord, SubmissionResponse
 
@@ -62,10 +62,15 @@ def _ensure_uploads_dir() -> None:
 )
 async def create_submission(
     image: UploadFile = File(..., description="JPEG or PNG image of the booklet cover"),
+    roi_x: float | None = Form(None, description="Normalized X coordinate of the guide rectangle"),
+    roi_y: float | None = Form(None, description="Normalized Y coordinate of the guide rectangle"),
+    roi_w: float | None = Form(None, description="Normalized width of the guide rectangle"),
+    roi_h: float | None = Form(None, description="Normalized height of the guide rectangle"),
 ) -> SubmissionResponse:
     """
     Accept a multipart image upload, validate it, persist it to disk, and
-    return a submission record with a generated UUID.
+    return a submission record with a generated UUID. Also accepts optional
+    Region of Interest (ROI) fractional coordinates of the camera visual guide.
 
     Validations:
     - Content-Type must be image/jpeg or image/png (HTTP 415).
@@ -111,6 +116,10 @@ async def create_submission(
         content_type=content_type,
         upload_timestamp=datetime.now(timezone.utc).isoformat(),
         status="received",
+        roi_x=roi_x,
+        roi_y=roi_y,
+        roi_w=roi_w,
+        roi_h=roi_h,
     )
     _submissions[submission_id] = record.model_dump()
 
@@ -174,10 +183,16 @@ async def preprocess_submission(submission_id: str) -> SubmissionRecord:
     # Import locally to avoid startup dependencies
     from app.services.preprocessing import preprocess_image
 
-    status_result = preprocess_image(input_path, str(processed_path))
+    # Build ROI tuple if coordinates exist
+    roi = None
+    if all(v is not None for v in (record.roi_x, record.roi_y, record.roi_w, record.roi_h)):
+        roi = (record.roi_x, record.roi_y, record.roi_w, record.roi_h)
+
+    status_result, debug_reason = preprocess_image(input_path, str(processed_path), roi)
 
     # ── 4. Update memory store record ────────────────────────────────────────
     record.preprocessing_status = status_result
+    record.preprocessing_debug_reason = debug_reason
     record.processed_image_path = str(processed_path)
     record.status = "processing" if status_result == "success" else "error" if status_result == "fallback" else record.status
 

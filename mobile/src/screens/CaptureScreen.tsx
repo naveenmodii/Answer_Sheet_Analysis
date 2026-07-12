@@ -32,8 +32,8 @@ type Props = NativeStackScreenProps<RootStackParamList, 'Capture'>;
 
 const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get('window');
 
-// A4 guide: 60% of screen width, height = width × √2
-const GUIDE_W = SCREEN_W * 0.6;
+// A4 guide: 85% of screen width, height = width × √2
+const GUIDE_W = SCREEN_W * 0.85;
 const GUIDE_H = GUIDE_W * 1.414;
 const CORNER_SIZE = 20;
 const CORNER_THICKNESS = 3;
@@ -77,7 +77,15 @@ export default function CaptureScreen({ navigation }: Props) {
       // Add file:// prefix so RN Image and FormData can read it
       const imageUri = `file://${filePath}`;
 
-      navigation.navigate('Review', { imageUri });
+      // Calculate normalized Region of Interest (ROI) from camera visual guide coordinates
+      const roi = {
+        x: (SCREEN_W - GUIDE_W) / 2 / SCREEN_W,
+        y: (SCREEN_H - GUIDE_H) / 2 / SCREEN_H,
+        w: GUIDE_W / SCREEN_W,
+        h: GUIDE_H / SCREEN_H,
+      };
+
+      navigation.navigate('Review', { imageUri, roi });
     } catch (err) {
       console.error('Capture failed:', err);
     } finally {

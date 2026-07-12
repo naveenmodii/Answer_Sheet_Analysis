@@ -91,6 +91,14 @@ class SubmissionRecord(BaseModel):
     status: Literal["received", "processing", "done", "error"] = "received"
     preprocessing_status: Literal["pending", "success", "fallback"] = "pending"
     processed_image_path: Optional[str] = None
+    preprocessing_debug_reason: Optional[str] = None
+
+    # Normalized region of interest (fractional 0.0 - 1.0)
+    roi_x: Optional[float] = None
+    roi_y: Optional[float] = None
+    roi_w: Optional[float] = None
+    roi_h: Optional[float] = None
+
 
 
 class SubmissionResponse(BaseModel):

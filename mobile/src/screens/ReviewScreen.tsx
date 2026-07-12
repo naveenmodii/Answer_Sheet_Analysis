@@ -39,10 +39,11 @@ interface SubmissionRecord {
   upload_timestamp: string;
   status: string;
   preprocessing_status: PreprocessingStatus;
+  preprocessing_debug_reason?: string;
 }
 
 export default function ReviewScreen({ route, navigation }: Props) {
-  const { imageUri } = route.params;
+  const { imageUri, roi } = route.params;
 
   const [flowState, setFlowState] = useState<FlowState>('idle');
   const [submissionId, setSubmissionId] = useState<string | null>(null);
@@ -50,6 +51,7 @@ export default function ReviewScreen({ route, navigation }: Props) {
 
   // Status of the booklet cropping/alignment pipeline
   const [prepStatus, setPrepStatus] = useState<PreprocessingStatus>('pending');
+  const [debugReason, setDebugReason] = useState<string | null>(null);
 
   // Holds either the local captured image URI or the remote preprocessed URL
   const [displayUri, setDisplayUri] = useState<string>(imageUri);
@@ -59,6 +61,7 @@ export default function ReviewScreen({ route, navigation }: Props) {
     setFlowState('uploading');
     setErrorMessage(null);
     setPrepStatus('pending');
+    setDebugReason(null);
     setDisplayUri(imageUri);
 
     let subId = '';
@@ -76,6 +79,14 @@ export default function ReviewScreen({ route, navigation }: Props) {
         name: filename,
         type: mimeType,
       } as unknown as Blob);
+
+      // Append normalized guide ROI hint if available
+      if (roi) {
+        formData.append('roi_x', String(roi.x));
+        formData.append('roi_y', String(roi.y));
+        formData.append('roi_w', String(roi.w));
+        formData.append('roi_h', String(roi.h));
+      }
 
       const uploadResponse = await axios.post<{ submission_id: string; status: string }>(
         `${API_BASE_URL}/submissions`,
@@ -110,6 +121,9 @@ export default function ReviewScreen({ route, navigation }: Props) {
 
       const finalStatus = prepResponse.data.preprocessing_status;
       setPrepStatus(finalStatus);
+      if (prepResponse.data.preprocessing_debug_reason) {
+        setDebugReason(prepResponse.data.preprocessing_debug_reason);
+      }
 
       // Force-refresh display image using cache-busting timestamp
       setDisplayUri(`${API_BASE_URL}/submissions/${subId}/preprocessed?t=${Date.now()}`);
@@ -123,7 +137,7 @@ export default function ReviewScreen({ route, navigation }: Props) {
       setErrorMessage(detail);
       setFlowState('error');
     }
-  }, [imageUri]);
+  }, [imageUri, roi]);
 
   const handleRetake = useCallback(() => {
     navigation.goBack();
@@ -169,10 +183,11 @@ export default function ReviewScreen({ route, navigation }: Props) {
               <Text style={styles.fallbackTitle}>Auto-Crop Unsuccessful</Text>
             </View>
             <Text style={styles.fallbackBody}>
-              Booklet edges couldn't be detected. We are using the original photo.
+              Booklet edges couldn't be detected (Reason: {debugReason || 'no_contour'}). We are using the original photo.
               For best results, retake the photo with the booklet fully visible on a dark background.
             </Text>
           </View>
+        
         )}
 
         {/* Clean crop success banner */}
