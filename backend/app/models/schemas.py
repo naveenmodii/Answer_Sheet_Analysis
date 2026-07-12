@@ -89,9 +89,12 @@ class SubmissionRecord(BaseModel):
     content_type: str
     upload_timestamp: str  # ISO-8601 UTC string
     status: Literal["received", "processing", "done", "error"] = "received"
+    preprocessing_status: Literal["pending", "success", "fallback"] = "pending"
+    processed_image_path: Optional[str] = None
 
 
 class SubmissionResponse(BaseModel):
     """Response body for POST /submissions (HTTP 201)."""
     submission_id: str
     status: str
+

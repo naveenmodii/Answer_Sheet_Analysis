@@ -2,17 +2,18 @@
  * CaptureScreen — Phase 1
  *
  * Shows a full-screen live camera preview via react-native-vision-camera v5.
- * - Requests CAMERA permission on mount.
- * - Renders a denied-permission view with "Open Settings" when blocked.
- * - Overlays an A4-proportion (1 : √2 ≈ 1 : 1.414) alignment guide.
- * - Capture button takes a photo at full resolution and navigates to ReviewScreen.
+ *
+ * VisionCamera v5 API (Nitro Modules architecture):
+ *   - usePhotoOutput() → creates a CameraPhotoOutput
+ *   - outputs={[photoOutput]} prop on <Camera> (replaces photo={true})
+ *   - photoOutput.capturePhoto({ flashMode }) → takes the photo
+ *   - camera ref does NOT have takePhoto() in v5
  */
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Dimensions,
   Linking,
-  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -22,6 +23,7 @@ import {
   Camera,
   useCameraDevice,
   useCameraPermission,
+  usePhotoOutput,
 } from 'react-native-vision-camera';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/AppNavigator';
@@ -39,7 +41,12 @@ const CORNER_THICKNESS = 3;
 export default function CaptureScreen({ navigation }: Props) {
   const { hasPermission, requestPermission } = useCameraPermission();
   const device = useCameraDevice('back');
-  const camera = useRef<Camera>(null);
+
+  // ── VisionCamera v5: photo output hook (replaces photo={true} prop) ─────────
+  const photoOutput = usePhotoOutput({
+    qualityPrioritization: 'quality',
+  });
+
   const [capturing, setCapturing] = useState(false);
 
   // ── Permission request on mount ────────────────────────────────────────────
@@ -49,26 +56,34 @@ export default function CaptureScreen({ navigation }: Props) {
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Capture handler ────────────────────────────────────────────────────────
+  // ── Capture handler (v5 API) ───────────────────────────────────────────────
   const handleCapture = useCallback(async () => {
-    if (!camera.current || capturing) return;
+    if (capturing) return;
     try {
       setCapturing(true);
-      const photo = await camera.current.takePhoto({
-        flash: 'off',
-      });
-      // photo.path is a local file URI on Android (no file:// prefix added by VisionCamera)
-      const imageUri =
-        Platform.OS === 'android'
-          ? `file://${photo.path}`
-          : photo.path;
+
+      // v5: capturePhoto() is on photoOutput, not on the camera ref
+      const photo = await photoOutput.capturePhoto(
+        { flashMode: 'off' },
+        {}, // required second arg in VisionCamera v5
+      );
+
+      // v5: Photo is in-memory — no .path property.
+      // Must call saveToTemporaryFileAsync() to write to disk first.
+      // Returns a filesystem path WITHOUT file:// prefix.
+      const filePath = await photo.saveToTemporaryFileAsync();
+      photo.dispose(); // free native memory; temp file stays on disk
+
+      // Add file:// prefix so RN Image and FormData can read it
+      const imageUri = `file://${filePath}`;
+
       navigation.navigate('Review', { imageUri });
     } catch (err) {
       console.error('Capture failed:', err);
     } finally {
       setCapturing(false);
     }
-  }, [camera, capturing, navigation]);
+  }, [capturing, photoOutput, navigation]);
 
   // ── Permission denied ──────────────────────────────────────────────────────
   if (!hasPermission) {
@@ -104,13 +119,12 @@ export default function CaptureScreen({ navigation }: Props) {
   // ── Camera view ────────────────────────────────────────────────────────────
   return (
     <View style={styles.root}>
-      {/* Full-screen camera preview */}
+      {/* Full-screen camera preview — v5: pass outputs array, not photo={true} */}
       <Camera
-        ref={camera}
         style={StyleSheet.absoluteFill}
         device={device}
         isActive={true}
-        photo={true}
+        outputs={[photoOutput]}
       />
 
       {/* Dark vignette overlay with transparent cut-out guide */}
@@ -170,7 +184,6 @@ export default function CaptureScreen({ navigation }: Props) {
 // ── Styles ───────────────────────────────────────────────────────────────────
 
 const OVERLAY_VERT = (SCREEN_H - GUIDE_H) / 2;
-const OVERLAY_HORIZ = (SCREEN_W - GUIDE_W) / 2;
 
 const styles = StyleSheet.create({
   root: {
@@ -252,7 +265,7 @@ const styles = StyleSheet.create({
     position: 'relative',
   },
 
-  // Corner accents (L-shaped brackets at each corner)
+  // Corner accents
   corner: {
     position: 'absolute',
     width: CORNER_SIZE,

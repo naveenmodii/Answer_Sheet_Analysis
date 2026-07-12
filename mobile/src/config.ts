@@ -14,4 +14,4 @@
  *
  * Production / deployed:  'https://api.your-domain.com'
  */
-export const API_BASE_URL = 'http://10.0.2.2:8000';
+export const API_BASE_URL = 'http://172.19.12.201:8000'; // Physical device → Mac LAN IP

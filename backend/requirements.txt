@@ -7,3 +7,6 @@ anthropic==0.28.0
 opencv-python==4.9.0.80
 openpyxl==3.1.2
 python-multipart==0.0.9
+pillow==10.3.0
+numpy<2.0.0
+

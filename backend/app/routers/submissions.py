@@ -131,3 +131,94 @@ async def get_submission(submission_id: str) -> SubmissionRecord:
             detail=f"Submission '{submission_id}' not found.",
         )
     return SubmissionRecord(**record)
+
+
+# ---------------------------------------------------------------------------
+# Preprocessing Endpoints (Phase 2)
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/{submission_id}/preprocess",
+    response_model=SubmissionRecord,
+    summary="Preprocess a booklet cover image",
+)
+async def preprocess_submission(submission_id: str) -> SubmissionRecord:
+    """
+    Triggers the booklet preprocessing pipeline on the uploaded image.
+    Crops, aligns, deskews, and enhances contrast.
+    """
+    # ── 1. Fetch record ──────────────────────────────────────────────────────
+    record_dict = _submissions.get(submission_id)
+    if record_dict is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Submission '{submission_id}' not found.",
+        )
+
+    record = SubmissionRecord(**record_dict)
+
+    # ── 2. Derive output paths ───────────────────────────────────────────────
+    input_path = record.saved_path
+    if not os.path.exists(input_path):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Original upload file not found on disk at {input_path}.",
+        )
+
+    extension = os.path.splitext(input_path)[1] or ".jpg"
+    processed_dir = UPLOADS_DIR / "processed"
+    processed_dir.mkdir(parents=True, exist_ok=True)
+    processed_path = processed_dir / f"{submission_id}{extension}"
+
+    # ── 3. Run Preprocessing Pipeline ────────────────────────────────────────
+    # Import locally to avoid startup dependencies
+    from app.services.preprocessing import preprocess_image
+
+    status_result = preprocess_image(input_path, str(processed_path))
+
+    # ── 4. Update memory store record ────────────────────────────────────────
+    record.preprocessing_status = status_result
+    record.processed_image_path = str(processed_path)
+    record.status = "processing" if status_result == "success" else "error" if status_result == "fallback" else record.status
+
+    # Keep original status but update preprocessing specifics
+    _submissions[submission_id] = record.model_dump()
+
+    return record
+
+
+@router.get(
+    "/{submission_id}/preprocessed",
+    summary="Get the preprocessed image file",
+)
+async def get_preprocessed_image(submission_id: str):
+    """
+    Returns the preprocessed image file. Falls back to returning the
+    EXIF-corrected original image if preprocessing failed/fell back.
+    """
+    record_dict = _submissions.get(submission_id)
+    if record_dict is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Submission '{submission_id}' not found.",
+        )
+
+    record = SubmissionRecord(**record_dict)
+
+    # Determine which file to serve
+    if record.processed_image_path and os.path.exists(record.processed_image_path):
+        image_to_serve = record.processed_image_path
+    else:
+        # Fall back to original upload
+        image_to_serve = record.saved_path
+
+    if not os.path.exists(image_to_serve):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Image file not found on disk.",
+        )
+
+    # Return the file as response
+    from fastapi.responses import FileResponse
+    return FileResponse(image_to_serve, media_type=record.content_type)
+
