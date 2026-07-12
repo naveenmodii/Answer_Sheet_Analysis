@@ -9,6 +9,9 @@ MongoDB integration is deferred to a later phase.
 """
 from __future__ import annotations
 
+from typing import Optional
+
+
 import uuid
 import os
 from datetime import datetime, timezone
@@ -62,10 +65,10 @@ def _ensure_uploads_dir() -> None:
 )
 async def create_submission(
     image: UploadFile = File(..., description="JPEG or PNG image of the booklet cover"),
-    roi_x: float | None = Form(None, description="Normalized X coordinate of the guide rectangle"),
-    roi_y: float | None = Form(None, description="Normalized Y coordinate of the guide rectangle"),
-    roi_w: float | None = Form(None, description="Normalized width of the guide rectangle"),
-    roi_h: float | None = Form(None, description="Normalized height of the guide rectangle"),
+    roi_x: Optional[float] = Form(None, description="Normalized X coordinate of the guide rectangle"),
+    roi_y: Optional[float] = Form(None, description="Normalized Y coordinate of the guide rectangle"),
+    roi_w: Optional[float] = Form(None, description="Normalized width of the guide rectangle"),
+    roi_h: Optional[float] = Form(None, description="Normalized height of the guide rectangle"),
 ) -> SubmissionResponse:
     """
     Accept a multipart image upload, validate it, persist it to disk, and
