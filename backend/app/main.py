@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.routers import health
+from app.routers import health, submissions
 
 load_dotenv()  # Load .env (if present) before anything else
 
@@ -17,13 +17,13 @@ async def lifespan(app: FastAPI):
     # ---------------------------------------------------------------------------
     # Startup
     # ---------------------------------------------------------------------------
-    # Phase 1: initialise MongoDB motor client here.
-    # Phase 1: warm up any other resources (e.g. pre-load OpenCV calibration).
+    # Phase 1: image upload dir is created on first request (see submissions.py).
+    # Future: initialise MongoDB motor client, warm up OpenCV.
     yield
     # ---------------------------------------------------------------------------
     # Shutdown
     # ---------------------------------------------------------------------------
-    # Phase 1: close the MongoDB motor client here.
+    # Future: close MongoDB motor client.
 
 
 app = FastAPI(
@@ -48,4 +48,5 @@ app.add_middleware(
 # Routers
 # ---------------------------------------------------------------------------
 app.include_router(health.router)
-# Phase 1: app.include_router(marks.router, prefix="/marks")
+app.include_router(submissions.router)
+# Future: app.include_router(extraction.router, prefix="/extraction")

@@ -1,7 +1,8 @@
 """
 Pydantic schemas for SIPAR.
 
-Phase 0: stubs only — full field validation added in Phase 1.
+Phase 0: stubs only.
+Phase 1: added SubmissionRecord + SubmissionResponse for the upload endpoint.
 """
 from __future__ import annotations
 
@@ -74,3 +75,23 @@ class ValidationStatus(BaseModel):
     per_question_ok: bool
     grand_total_ok: bool
     mismatches: list[str] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Submission models (Phase 1) — upload tracking
+# ---------------------------------------------------------------------------
+
+class SubmissionRecord(BaseModel):
+    """Record stored in-memory after an image is uploaded."""
+    submission_id: str
+    original_filename: str
+    saved_path: str  # Absolute path on disk inside backend/uploads/
+    content_type: str
+    upload_timestamp: str  # ISO-8601 UTC string
+    status: Literal["received", "processing", "done", "error"] = "received"
+
+
+class SubmissionResponse(BaseModel):
+    """Response body for POST /submissions (HTTP 201)."""
+    submission_id: str
+    status: str

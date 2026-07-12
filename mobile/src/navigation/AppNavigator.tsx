@@ -8,7 +8,8 @@ import ReviewScreen from '../screens/ReviewScreen';
 // ─── Route param types ───────────────────────────────────────────────────────
 export type RootStackParamList = {
   Capture: undefined;
-  Review: undefined; // Phase 1: will carry extracted data from Capture
+  /** Phase 1: Review receives the local temp URI of the captured photo. */
+  Review: { imageUri: string };
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -23,12 +24,13 @@ export default function AppNavigator() {
           headerStyle: { backgroundColor: '#1a1a2e' },
           headerTintColor: '#e0e0ff',
           headerTitleStyle: { fontWeight: '700' },
+          headerBackTitleVisible: false,
         }}
       >
         <Stack.Screen
           name="Capture"
           component={CaptureScreen}
-          options={{ title: 'Scan Booklet' }}
+          options={{ title: 'Scan Booklet', headerShown: false }}
         />
         <Stack.Screen
           name="Review"

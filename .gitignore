@@ -80,6 +80,11 @@ ios/DerivedData/
 # TypeScript
 *.tsbuildinfo
 
+# ─── Backend uploads ─────────────────────────────────────────────────────────
+# Keep the directory but ignore its contents (real image files)
+backend/uploads/*
+!backend/uploads/.gitkeep
+
 # ─── General ─────────────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
