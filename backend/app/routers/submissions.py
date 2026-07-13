@@ -240,3 +240,91 @@ async def get_preprocessed_image(submission_id: str):
     from fastapi.responses import FileResponse
     return FileResponse(image_to_serve, media_type=record.content_type)
 
+
+# ---------------------------------------------------------------------------
+# Extraction Endpoints (Phase 3)
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/{submission_id}/extract",
+    response_model=SubmissionRecord,
+    summary="Extract marks details from preprocessed cover page",
+)
+async def extract_submission_details(submission_id: str) -> SubmissionRecord:
+    """
+    Triggers the Anthropic Claude Vision extraction step on the preprocessed cover page
+    (or falls back to the original if preprocessing fell back).
+    Defensively handles parsing/validation errors and sets error codes accordingly.
+    """
+    # ── 1. Fetch record ──────────────────────────────────────────────────────
+    record_dict = _submissions.get(submission_id)
+    if record_dict is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Submission '{submission_id}' not found.",
+        )
+
+    record = SubmissionRecord(**record_dict)
+
+    # ── 2. Determine target image file for extraction ────────────────────────
+    # Use preprocessed image if available, else original EXIF-corrected upload
+    image_path = record.processed_image_path
+    if not image_path or not os.path.exists(image_path):
+        image_path = record.saved_path
+
+    if not os.path.exists(image_path):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Booklet image file not found on disk.",
+        )
+
+    # ── 3. Run Claude Vision Extraction ──────────────────────────────────────
+    # Import service locally
+    from app.services.extraction import extract_details_from_booklet
+
+    try:
+        extraction_result = extract_details_from_booklet(
+            image_path=image_path,
+            media_type=record.content_type
+        )
+        record.extraction_status = "success"
+        record.extraction_result = extraction_result
+        record.extraction_error = None
+        record.status = "done"
+    except Exception as e:
+        record.extraction_status = "failed"
+        record.extraction_result = None
+        record.extraction_error = str(e)
+        record.status = "error"
+
+    # ── 4. Save updated record in-memory ──────────────────────────────────────
+    _submissions[submission_id] = record.model_dump()
+
+    return record
+
+
+@router.get(
+    "/{submission_id}/extraction",
+    summary="Get the extraction result details",
+)
+async def get_extraction_result(submission_id: str):
+    """
+    Returns only the structured extraction JSON payload or error status
+    for simplified verification.
+    """
+    record_dict = _submissions.get(submission_id)
+    if record_dict is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Submission '{submission_id}' not found.",
+        )
+
+    record = SubmissionRecord(**record_dict)
+    return {
+        "submission_id": submission_id,
+        "extraction_status": record.extraction_status,
+        "extraction_result": record.extraction_result,
+        "extraction_error": record.extraction_error,
+    }
+
+

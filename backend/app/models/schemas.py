@@ -89,9 +89,15 @@ class SubmissionRecord(BaseModel):
     content_type: str
     upload_timestamp: str  # ISO-8601 UTC string
     status: Literal["received", "processing", "done", "error"] = "received"
+    # Preprocessing fields
     preprocessing_status: Literal["pending", "success", "fallback"] = "pending"
     processed_image_path: Optional[str] = None
     preprocessing_debug_reason: Optional[str] = None
+
+    # Extraction fields (Phase 3)
+    extraction_status: Literal["pending", "success", "failed"] = "pending"
+    extraction_result: Optional[ExtractionResult] = None
+    extraction_error: Optional[str] = None
 
     # Normalized region of interest (fractional 0.0 - 1.0)
     roi_x: Optional[float] = None
