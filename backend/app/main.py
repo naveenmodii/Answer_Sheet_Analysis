@@ -1,6 +1,7 @@
 """
 SIPAR Backend — FastAPI application entry point.
 """
+import os
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
@@ -37,7 +38,13 @@ app = FastAPI(
 )
 
 # ---------------------------------------------------------------------------
-# CORS — allow all origins in development; tighten for production.
+# CORS
+# ---------------------------------------------------------------------------
+# allow_origins=["*"] is intentionally permissive for small-scale teacher
+# testing where the client is a physical Android/iOS device on the same
+# network (or connecting to a cloud-hosted backend). If this were ever
+# expanded to a real production deployment with web clients, tighten this
+# to an explicit allowlist: allow_origins=["https://your-domain.com"].
 # ---------------------------------------------------------------------------
 app.add_middleware(
     CORSMiddleware,
@@ -53,3 +60,15 @@ app.add_middleware(
 app.include_router(health.router)
 app.include_router(submissions.router)
 # Future: app.include_router(extraction.router, prefix="/extraction")
+
+# ---------------------------------------------------------------------------
+# Local / Render entry point
+# ---------------------------------------------------------------------------
+# On Render the platform sets $PORT dynamically.  Locally it defaults to 8000.
+# Run directly with: python -m app.main   (or uvicorn app.main:app --port 8000)
+# ---------------------------------------------------------------------------
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run("app.main:app", host="0.0.0.0", port=port, reload=False)
+

@@ -10,6 +10,7 @@ import {
   TextInput,
   Modal,
 } from 'react-native';
+import { Feather } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
@@ -45,7 +46,6 @@ export default function DashboardScreen({ navigation }: Props) {
         const fileContent = await FileSystem.readAsStringAsync(sessionsFileUri);
         const data = JSON.parse(fileContent);
         if (Array.isArray(data)) {
-          // Sort by creation date descending
           setSessions(
             data.sort(
               (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
@@ -62,7 +62,6 @@ export default function DashboardScreen({ navigation }: Props) {
     }
   }, [sessionsFileUri]);
 
-  // Load sessions list whenever screen gets focus
   useFocusEffect(
     useCallback(() => {
       loadSessions();
@@ -70,12 +69,10 @@ export default function DashboardScreen({ navigation }: Props) {
   );
 
   const handleCreateNewSession = () => {
-    // Generate simple clean UUID
     const sessionUuid =
       Math.random().toString(36).substring(2, 11) +
       '-' +
       Math.random().toString(36).substring(2, 11);
-
     navigation.navigate('Capture', { sessionId: sessionUuid });
   };
 
@@ -84,10 +81,7 @@ export default function DashboardScreen({ navigation }: Props) {
     try {
       const fileInfo = await FileSystem.getInfoAsync(session.localFilePath);
       if (!fileInfo.exists) {
-        Alert.alert(
-          'Spreadsheet Missing',
-          'The local Excel file for this session could not be found.'
-        );
+        Alert.alert('Spreadsheet Missing', 'The local Excel file for this session could not be found.');
         return;
       }
 
@@ -97,17 +91,11 @@ export default function DashboardScreen({ navigation }: Props) {
         return;
       }
 
-      // 1. Sanitize the user-assigned custom session name for safe filename usage
       const sanitizedName = session.name.replace(/[\/\\?%*:|"<>\s]+/g, '_');
       tempUri = `${FileSystem.cacheDirectory}${sanitizedName}.xlsx`;
 
-      // 2. Make a temporary copy with the user-assigned custom name
-      await FileSystem.copyAsync({
-        from: session.localFilePath,
-        to: tempUri,
-      });
+      await FileSystem.copyAsync({ from: session.localFilePath, to: tempUri });
 
-      // 3. Share the custom named copy instead of session_{id}.xlsx
       await Sharing.shareAsync(tempUri, {
         mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         dialogTitle: `Share marks for ${session.name}`,
@@ -117,12 +105,11 @@ export default function DashboardScreen({ navigation }: Props) {
       console.error('Failed to share session spreadsheet:', err);
       Alert.alert('Share Error', 'Could not open native sharing options.');
     } finally {
-      // 4. Safely delete the temporary renamed copy from cache
       if (tempUri) {
         try {
           await FileSystem.deleteAsync(tempUri, { idempotent: true });
         } catch (cleanupErr) {
-          console.warn('Failed to clean up temporary share spreadsheet file:', cleanupErr);
+          console.warn('Failed to clean up temporary share file:', cleanupErr);
         }
       }
     }
@@ -131,7 +118,7 @@ export default function DashboardScreen({ navigation }: Props) {
   const handleDeleteSession = (session: SessionMetadata) => {
     Alert.alert(
       'Delete Session',
-      `Are you sure you want to delete "${session.name}"? This will delete the local spreadsheet file permanently.`,
+      `Are you sure you want to delete "${session.name}"? The local spreadsheet file will be permanently removed.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -139,10 +126,7 @@ export default function DashboardScreen({ navigation }: Props) {
           style: 'destructive',
           onPress: async () => {
             try {
-              // 1. Delete actual xlsx file
               await FileSystem.deleteAsync(session.localFilePath, { idempotent: true });
-
-              // 2. Remove metadata entry
               const updated = sessions.filter((s) => s.sessionId !== session.sessionId);
               await FileSystem.writeAsStringAsync(sessionsFileUri, JSON.stringify(updated));
               setSessions(updated);
@@ -164,15 +148,10 @@ export default function DashboardScreen({ navigation }: Props) {
 
   const handleRenameConfirm = async () => {
     if (!renameSessionId || !renameNameText.trim()) return;
-
     try {
-      const updated = sessions.map((s) => {
-        if (s.sessionId === renameSessionId) {
-          return { ...s, name: renameNameText.trim() };
-        }
-        return s;
-      });
-
+      const updated = sessions.map((s) =>
+        s.sessionId === renameSessionId ? { ...s, name: renameNameText.trim() } : s
+      );
       await FileSystem.writeAsStringAsync(sessionsFileUri, JSON.stringify(updated));
       setSessions(updated);
       setRenameModalVisible(false);
@@ -186,13 +165,9 @@ export default function DashboardScreen({ navigation }: Props) {
 
   const formatDate = (isoStr: string) => {
     try {
-      const date = new Date(isoStr);
-      return date.toLocaleDateString(undefined, {
-        month: 'short',
-        day: 'numeric',
-        year: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
+      return new Date(isoStr).toLocaleDateString(undefined, {
+        month: 'short', day: 'numeric', year: 'numeric',
+        hour: '2-digit', minute: '2-digit',
       });
     } catch {
       return isoStr;
@@ -201,119 +176,99 @@ export default function DashboardScreen({ navigation }: Props) {
 
   return (
     <View style={styles.root}>
-      {/* Upper Title Area */}
+      {/* Header */}
       <View style={styles.header}>
         <Text style={styles.appTitle}>SIPAR</Text>
         <Text style={styles.appSub}>Smart Photo-to-Answer-Records</Text>
       </View>
 
-      {/* Main Sessions Container */}
-      <ScrollView
-        style={styles.scroll}
-        contentContainerStyle={styles.scrollContent}
-      >
-        <Text style={styles.sectionHeader}>Scan Batches Library</Text>
+      {/* Sessions List */}
+      <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
+        <Text style={styles.sectionLabel}>SCAN BATCHES</Text>
 
         {loading ? (
           <View style={styles.centerWrap}>
-            <ActivityIndicator size="large" color="#6366f1" />
+            <ActivityIndicator size="large" color={ACCENT} />
           </View>
         ) : sessions.length === 0 ? (
-          /* Empty Library State Card */
+          /* Empty state */
           <View style={styles.emptyCard}>
-            <Text style={styles.emptyIcon}>📊</Text>
+            <Feather name="inbox" size={40} color={MUTED} />
             <Text style={styles.emptyTitle}>No Scan Batches Yet</Text>
             <Text style={styles.emptyBody}>
-              Start scanning student booklets to compile consolidated Excel marks sheets automatically.
+              Start a new session to photograph student booklets and compile a consolidated marks sheet.
             </Text>
             <Pressable
-              style={({ pressed }) => [
-                styles.primaryButton,
-                pressed && styles.buttonPressed,
-              ]}
+              style={({ pressed }) => [styles.primaryBtn, pressed && styles.btnPressed]}
               onPress={handleCreateNewSession}
             >
-              <Text style={styles.primaryButtonText}>+ New Scan Session</Text>
+              <Feather name="plus" size={16} color="#fff" style={styles.btnIcon} />
+              <Text style={styles.primaryBtnText}>New Scan Session</Text>
             </Pressable>
           </View>
         ) : (
-          /* Session Cards List */
           sessions.map((session) => (
             <View key={session.sessionId} style={styles.sessionCard}>
-              <View style={styles.cardHeaderRow}>
+              <View style={styles.cardTop}>
                 <View style={styles.metaCol}>
                   <Text style={styles.sessionName} numberOfLines={1}>
                     {session.name}
                   </Text>
-                  <Text style={styles.sessionDate}>
-                    {formatDate(session.createdAt)}
-                  </Text>
+                  <Text style={styles.sessionDate}>{formatDate(session.createdAt)}</Text>
                 </View>
                 <View style={styles.badge}>
                   <Text style={styles.badgeText}>
-                    {session.rowCount} {session.rowCount === 1 ? 'row' : 'rows'}
+                    {session.rowCount} {session.rowCount === 1 ? 'booklet' : 'booklets'}
                   </Text>
                 </View>
               </View>
 
-              {/* Action Buttons Row */}
+              <View style={styles.divider} />
+
+              {/* Card actions */}
               <View style={styles.actionRow}>
                 <Pressable
-                  style={({ pressed }) => [
-                    styles.actionBtn,
-                    styles.shareBtn,
-                    pressed && styles.buttonPressed,
-                  ]}
+                  style={({ pressed }) => [styles.actionBtn, styles.shareBtn, pressed && styles.btnPressed]}
                   onPress={() => handleShareSession(session)}
                   accessibilityLabel={`Share session ${session.name}`}
                 >
-                  <Text style={styles.shareBtnText}>📊 Share sheet</Text>
+                  <Feather name="share-2" size={14} color="#fff" style={styles.btnIcon} />
+                  <Text style={styles.shareBtnText}>Share</Text>
                 </Pressable>
 
                 <Pressable
-                  style={({ pressed }) => [
-                    styles.actionBtn,
-                    styles.editBtn,
-                    pressed && styles.buttonPressed,
-                  ]}
+                  style={({ pressed }) => [styles.actionBtn, styles.editBtn, pressed && styles.btnPressed]}
                   onPress={() => openRenameDialog(session)}
                   accessibilityLabel={`Rename session ${session.name}`}
                 >
-                  <Text style={styles.editBtnText}>✏️ Rename</Text>
+                  <Feather name="edit-2" size={14} color={TEXT_MUTED} style={styles.btnIcon} />
+                  <Text style={styles.editBtnText}>Rename</Text>
                 </Pressable>
 
                 <Pressable
-                  style={({ pressed }) => [
-                    styles.actionBtn,
-                    styles.deleteBtn,
-                    pressed && styles.buttonPressed,
-                  ]}
+                  style={({ pressed }) => [styles.actionBtn, styles.deleteBtn, pressed && styles.btnPressed]}
                   onPress={() => handleDeleteSession(session)}
                   accessibilityLabel={`Delete session ${session.name}`}
                 >
-                  <Text style={styles.deleteBtnText}>🗑️</Text>
+                  <Feather name="trash-2" size={14} color={DANGER_TEXT} />
                 </Pressable>
               </View>
             </View>
           ))
         )}
 
-        {/* Append Bottom Action if library has sessions */}
         {sessions.length > 0 && (
           <Pressable
-            style={({ pressed }) => [
-              styles.primaryButton,
-              styles.fabButton,
-              pressed && styles.buttonPressed,
-            ]}
+            style={({ pressed }) => [styles.primaryBtn, styles.fabBtn, pressed && styles.btnPressed]}
             onPress={handleCreateNewSession}
           >
-            <Text style={styles.primaryButtonText}>+ New Scan Session</Text>
+            <Feather name="plus" size={16} color="#fff" style={styles.btnIcon} />
+            <Text style={styles.primaryBtnText}>New Scan Session</Text>
           </Pressable>
         )}
       </ScrollView>
 
-      {/* Rename Dialog Modal */}
+      {/* Rename Modal */}
       <Modal
         visible={renameModalVisible}
         transparent={true}
@@ -322,13 +277,13 @@ export default function DashboardScreen({ navigation }: Props) {
       >
         <View style={styles.modalBg}>
           <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Rename Scan Session</Text>
+            <Text style={styles.modalTitle}>Rename Session</Text>
             <TextInput
               style={styles.modalInput}
               value={renameNameText}
               onChangeText={setRenameNameText}
-              placeholder="Session Name"
-              placeholderTextColor="#64748b"
+              placeholder="Session name"
+              placeholderTextColor={MUTED}
               maxLength={40}
             />
             <View style={styles.modalButtons}>
@@ -352,221 +307,175 @@ export default function DashboardScreen({ navigation }: Props) {
   );
 }
 
+// ── Design tokens ─────────────────────────────────────────────────────────────
+const BG        = '#0b0b0e';
+const SURFACE   = '#111116';
+const BORDER    = '#1e1e26';
+const ACCENT    = '#5f5af6';
+const TEXT      = '#e8e8f0';
+const TEXT_MUTED = '#7a7a8c';
+const MUTED     = '#4a4a5a';
+const SUCCESS_TEXT  = '#34d399';
+const DANGER_TEXT   = '#f87171';
+
 const styles = StyleSheet.create({
-  root: {
-    flex: 1,
-    backgroundColor: '#0f0f1a',
-  },
+  root: { flex: 1, backgroundColor: BG },
+
+  // ── Header ──────────────────────────────────────────────────────────────────
   header: {
-    paddingTop: 58,
+    paddingTop: 60,
     paddingBottom: 20,
-    alignItems: 'center',
-    backgroundColor: '#16162a',
+    paddingHorizontal: 20,
     borderBottomWidth: 1,
-    borderColor: 'rgba(255,255,255,0.06)',
+    borderColor: BORDER,
   },
   appTitle: {
-    fontSize: 28,
-    fontWeight: '900',
-    color: '#818cf8',
-    letterSpacing: 2,
+    fontSize: 22,
+    fontWeight: '700',
+    color: TEXT,
+    letterSpacing: 1.5,
   },
   appSub: {
     fontSize: 12,
-    color: '#94a3b8',
-    marginTop: 4,
-    fontWeight: '600',
-  },
-  scroll: {
-    flex: 1,
-  },
-  scrollContent: {
-    padding: 20,
-    paddingBottom: 48,
-    gap: 16,
-  },
-  sectionHeader: {
-    color: '#a5b4fc',
-    fontSize: 15,
-    fontWeight: '700',
-    marginBottom: 4,
-    textTransform: 'uppercase',
-    letterSpacing: 1,
-  },
-  centerWrap: {
-    paddingVertical: 64,
-    alignItems: 'center',
-  },
-  buttonPressed: {
-    opacity: 0.82,
-    transform: [{ scale: 0.98 }],
+    color: TEXT_MUTED,
+    marginTop: 3,
+    fontWeight: '500',
+    letterSpacing: 0.2,
   },
 
-  /* Empty Card State */
+  // ── List ────────────────────────────────────────────────────────────────────
+  scroll: { flex: 1 },
+  scrollContent: { padding: 20, paddingBottom: 56, gap: 12 },
+
+  sectionLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: MUTED,
+    letterSpacing: 1.2,
+    marginBottom: 4,
+  },
+
+  centerWrap: { paddingVertical: 64, alignItems: 'center' },
+
+  // ── Empty state ─────────────────────────────────────────────────────────────
   emptyCard: {
-    backgroundColor: '#16162a',
+    backgroundColor: SURFACE,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.04)',
-    borderRadius: 18,
-    padding: 30,
+    borderColor: BORDER,
+    borderRadius: 16,
+    padding: 32,
     alignItems: 'center',
-    gap: 14,
+    gap: 12,
     marginTop: 8,
   },
-  emptyIcon: {
-    fontSize: 48,
-  },
-  emptyTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#f8fafc',
-  },
+  emptyTitle: { fontSize: 17, fontWeight: '700', color: TEXT },
   emptyBody: {
     fontSize: 13,
-    color: '#64748b',
+    color: TEXT_MUTED,
     textAlign: 'center',
     lineHeight: 20,
-    marginBottom: 12,
+    marginBottom: 8,
   },
 
-  /* Session Cards List */
+  // ── Session card ────────────────────────────────────────────────────────────
   sessionCard: {
-    backgroundColor: '#16162a',
+    backgroundColor: SURFACE,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.04)',
-    borderRadius: 16,
+    borderColor: BORDER,
+    borderRadius: 14,
     padding: 16,
-    gap: 14,
+    gap: 12,
   },
-  cardHeaderRow: {
+  cardTop: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'flex-start',
     gap: 12,
   },
-  metaCol: {
-    flex: 1,
-    gap: 4,
-  },
-  sessionName: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: '#f8fafc',
-  },
-  sessionDate: {
-    fontSize: 12,
-    color: '#64748b',
-  },
+  metaCol: { flex: 1, gap: 4 },
+  sessionName: { fontSize: 15, fontWeight: '600', color: TEXT },
+  sessionDate: { fontSize: 12, color: TEXT_MUTED },
   badge: {
-    backgroundColor: 'rgba(99, 102, 241, 0.12)',
+    backgroundColor: `${ACCENT}18`,
     paddingHorizontal: 10,
-    paddingVertical: 5,
+    paddingVertical: 4,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: '#6366f1',
+    borderColor: `${ACCENT}40`,
   },
-  badgeText: {
-    color: '#a5b4fc',
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  actionRow: {
-    flexDirection: 'row',
-    gap: 10,
-  },
+  badgeText: { color: ACCENT, fontSize: 12, fontWeight: '600' },
+  divider: { height: 1, backgroundColor: BORDER },
+
+  // ── Action buttons ──────────────────────────────────────────────────────────
+  actionRow: { flexDirection: 'row', gap: 8 },
   actionBtn: {
-    paddingVertical: 10,
-    borderRadius: 10,
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
+    paddingVertical: 9,
+    borderRadius: 9,
   },
-  shareBtn: {
-    flex: 2,
-    backgroundColor: '#10b981',
-  },
-  shareBtnText: {
-    color: '#fff',
-    fontSize: 13,
-    fontWeight: '700',
-  },
+  btnIcon: { marginRight: 5 },
+  shareBtn: { flex: 2, backgroundColor: ACCENT },
+  shareBtnText: { color: '#fff', fontSize: 13, fontWeight: '600' },
   editBtn: {
     flex: 1.5,
-    backgroundColor: 'rgba(255,255,255,0.03)',
+    backgroundColor: 'transparent',
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.08)',
+    borderColor: BORDER,
   },
-  editBtnText: {
-    color: '#cbd5e1',
-    fontSize: 13,
-    fontWeight: '600',
-  },
+  editBtnText: { color: TEXT_MUTED, fontSize: 13, fontWeight: '500' },
   deleteBtn: {
-    width: 44,
-    backgroundColor: 'rgba(239, 68, 68, 0.08)',
+    width: 40,
+    backgroundColor: `${DANGER_TEXT}10`,
     borderWidth: 1,
-    borderColor: 'rgba(239, 68, 68, 0.2)',
-  },
-  deleteBtnText: {
-    fontSize: 15,
+    borderColor: `${DANGER_TEXT}25`,
   },
 
-  /* Buttons */
-  primaryButton: {
-    backgroundColor: '#6366f1',
-    paddingVertical: 14,
-    paddingHorizontal: 28,
+  // ── Primary button ──────────────────────────────────────────────────────────
+  primaryBtn: {
+    flexDirection: 'row',
+    backgroundColor: ACCENT,
+    paddingVertical: 13,
+    paddingHorizontal: 24,
     borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
-    minHeight: 50,
+    minHeight: 48,
   },
-  primaryButtonText: {
-    color: '#fff',
-    fontSize: 15,
-    fontWeight: '700',
-  },
-  fabButton: {
-    marginTop: 10,
-  },
+  primaryBtnText: { color: '#fff', fontSize: 15, fontWeight: '600' },
+  fabBtn: { marginTop: 8 },
+  btnPressed: { opacity: 0.82, transform: [{ scale: 0.98 }] },
 
-  /* Modals */
+  // ── Modal ────────────────────────────────────────────────────────────────────
   modalBg: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.65)',
+    backgroundColor: 'rgba(0,0,0,0.6)',
     justifyContent: 'center',
     alignItems: 'center',
     padding: 24,
   },
   modalContent: {
     width: '100%',
-    backgroundColor: '#1e1e38',
+    backgroundColor: '#18181f',
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.08)',
-    borderRadius: 20,
+    borderColor: BORDER,
+    borderRadius: 18,
     padding: 20,
     gap: 16,
   },
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#f8fafc',
-    textAlign: 'center',
-  },
+  modalTitle: { fontSize: 17, fontWeight: '700', color: TEXT, textAlign: 'center' },
   modalInput: {
-    backgroundColor: 'rgba(0,0,0,0.2)',
+    backgroundColor: '#0f0f14',
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.08)',
+    borderColor: BORDER,
     borderRadius: 10,
     paddingHorizontal: 12,
-    paddingVertical: 10,
-    color: '#f8fafc',
+    paddingVertical: 11,
+    color: TEXT,
     fontSize: 14,
   },
-  modalButtons: {
-    flexDirection: 'row',
-    gap: 12,
-    marginTop: 4,
-  },
+  modalButtons: { flexDirection: 'row', gap: 10 },
   modalBtn: {
     flex: 1,
     paddingVertical: 12,
@@ -574,20 +483,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  modalCancelBtn: {
-    backgroundColor: 'rgba(255,255,255,0.03)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.08)',
-  },
-  modalCancelText: {
-    color: '#cbd5e1',
-    fontWeight: '600',
-  },
-  modalSaveBtn: {
-    backgroundColor: '#6366f1',
-  },
-  modalSaveText: {
-    color: '#fff',
-    fontWeight: '700',
-  },
+  modalCancelBtn: { backgroundColor: 'transparent', borderWidth: 1, borderColor: BORDER },
+  modalCancelText: { color: TEXT_MUTED, fontWeight: '600' },
+  modalSaveBtn: { backgroundColor: ACCENT },
+  modalSaveText: { color: '#fff', fontWeight: '700' },
 });

@@ -1,12 +1,15 @@
 /**
- * ReviewScreen — Phase 3
+ * ReviewScreen — Phase 3 + Phase 5 + Phase 8
  *
- * Displays the captured image and provides actions:
- *   • Retake — navigates back to CaptureScreen, discarding the current image.
- *   • Process & Upload — uploads to POST /submissions, then automatically
- *     calls POST /submissions/{id}/preprocess to align and clean the cover page.
- *   • Extract Details — triggers POST /submissions/{id}/extract to call the Claude
- *     Vision API, extract student metadata/marks, and displays them.
+ * Displays the captured image and manages the full submission lifecycle:
+ *   • Process & Upload → uploads image + calls preprocess
+ *   • Extract Details  → calls Claude Vision API
+ *   • Editable form    → teacher corrects extracted fields
+ *   • Live validation  → debounced re-validation on every edit
+ *   • Confirm & Save   → commits to session SQLite record
+ *
+ * Part 2 fix: KeyboardAwareScrollView scrolls the active field above the
+ * keyboard on both iOS and Android — no field is ever hidden.
  */
 import React, { useCallback, useState } from 'react';
 import {
@@ -14,13 +17,14 @@ import {
   Image,
   Platform,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
   View,
   TextInput,
   Alert,
 } from 'react-native';
+import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
+import { Feather } from '@expo/vector-icons';
 import axios, { AxiosError } from 'axios';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/AppNavigator';
@@ -102,27 +106,41 @@ interface SubmissionRecord {
   validation_result?: ValidationResult;
 }
 
+// ── Design tokens ─────────────────────────────────────────────────────────────
+const BG          = '#0b0b0e';
+const SURFACE     = '#111116';
+const PANEL_BG    = '#0e0e13';
+const BORDER      = '#1e1e26';
+const ACCENT      = '#5f5af6';
+const TEXT        = '#e8e8f0';
+const TEXT_MUTED  = '#7a7a8c';
+const MUTED       = '#4a4a5a';
+const SUCCESS_BG   = 'rgba(16,185,129,0.07)';
+const SUCCESS_BORDER = 'rgba(16,185,129,0.25)';
+const SUCCESS_TEXT   = '#34d399';
+const WARN_BG     = 'rgba(245,158,11,0.07)';
+const WARN_BORDER  = 'rgba(245,158,11,0.25)';
+const WARN_TEXT    = '#fbbf24';
+const DANGER_BG   = 'rgba(239,68,68,0.07)';
+const DANGER_BORDER = 'rgba(239,68,68,0.25)';
+const DANGER_TEXT   = '#f87171';
+const INFO_BG     = 'rgba(59,130,246,0.07)';
+const INFO_BORDER  = 'rgba(59,130,246,0.25)';
+const INFO_TEXT    = '#60a5fa';
+
 export default function ReviewScreen({ route, navigation }: Props) {
   const { imageUri, sessionId } = route.params;
 
   const [flowState, setFlowState] = useState<FlowState>('idle');
   const [submissionId, setSubmissionId] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-
-  // Status of the booklet cropping/alignment pipeline
   const [prepStatus, setPrepStatus] = useState<PreprocessingStatus>('pending');
   const [prepDebugReason, setPrepDebugReason] = useState<string | null>(null);
-
-  // Status of the Claude OCR extraction step
   const [extractionResult, setExtractionResult] = useState<ExtractionResult | null>(null);
-
-  // Status of the arithmetic validation check
   const [validationResult, setValidationResult] = useState<ValidationResult | null>(null);
-
-  // Holds either the local captured image URI or the remote preprocessed URL
   const [displayUri, setDisplayUri] = useState<string>(imageUri);
 
-  // ── Phase 5: Local Form State Hooks ───────────────────────────────────────
+  // ── Phase 5: Local form state ─────────────────────────────────────────────
   const [formName, setFormName] = useState('');
   const [formRollNo, setFormRollNo] = useState('');
   const [formBranch, setFormBranch] = useState('');
@@ -132,32 +150,24 @@ export default function ReviewScreen({ route, navigation }: Props) {
   const [formQuestionTotals, setFormQuestionTotals] = useState<QuestionTotal[]>([]);
   const [formGrandTotal, setFormGrandTotal] = useState('');
 
-  // ── Upload & Preprocess Handler (Phase 2) ─────────────────────────────────
+  // ── Upload & Preprocess Handler ───────────────────────────────────────────
   const handleUploadAndPreprocess = useCallback(async () => {
     setFlowState('uploading');
     setErrorMessage(null);
     setPrepStatus('pending');
     setPrepDebugReason(null);
-    setExtractionResult(null);
-    setValidationResult(null);
-    setDisplayUri(imageUri);
 
-    let subId = '';
-
-    // ── Step 1: Upload raw image ─────────────────────────────────────────────
     try {
-      const uriParts = imageUri.split('.');
-      const ext = (uriParts[uriParts.length - 1] ?? 'jpg').toLowerCase();
-      const mimeType = ext === 'png' ? 'image/png' : 'image/jpeg';
-      const filename = `capture.${ext}`;
-
       const formData = new FormData();
-      formData.append('image', {
-        uri: Platform.OS === 'android' ? imageUri : imageUri.replace('file://', ''),
+      const filename = imageUri.split('/').pop() || 'booklet.jpg';
+      formData.append('file', {
+        uri: imageUri,
         name: filename,
-        type: mimeType,
-      } as unknown as Blob);
-      formData.append('session_id', sessionId); // Send Phase 7 active session association!
+        type: 'image/jpeg',
+      } as any);
+      if (sessionId) {
+        formData.append('session_id', sessionId);
+      }
 
       const uploadResponse = await axios.post<{ submission_id: string; status: string }>(
         `${API_BASE_URL}/submissions`,
@@ -165,27 +175,21 @@ export default function ReviewScreen({ route, navigation }: Props) {
         {
           headers: { 'Content-Type': 'multipart/form-data' },
           timeout: 30_000,
-        },
+        }
       );
 
-      subId = uploadResponse.data.submission_id;
+      const subId = uploadResponse.data.submission_id;
       setSubmissionId(subId);
       setFlowState('preprocessing');
 
-      // ── Step 2: Trigger Preprocess ──────────────────────────────────────────
       const prepResponse = await axios.post<SubmissionRecord>(
         `${API_BASE_URL}/submissions/${subId}/preprocess`,
         {},
         { timeout: 30_000 }
       );
 
-      const finalStatus = prepResponse.data.preprocessing_status;
-      setPrepStatus(finalStatus);
-      if (prepResponse.data.preprocessing_debug_reason) {
-        setPrepDebugReason(prepResponse.data.preprocessing_debug_reason);
-      }
-
-      // Force-refresh display image using cache-busting timestamp
+      setPrepStatus(prepResponse.data.preprocessing_status);
+      setPrepDebugReason(prepResponse.data.preprocessing_debug_reason ?? null);
       setDisplayUri(`${API_BASE_URL}/submissions/${subId}/preprocessed?t=${Date.now()}`);
       setFlowState('preprocessed');
     } catch (err) {
@@ -193,16 +197,15 @@ export default function ReviewScreen({ route, navigation }: Props) {
       const detail =
         axiosErr.response?.data?.detail ??
         axiosErr.message ??
-        'Preprocessing failed on the server.';
+        'Extraction request failed. Check server status.';
       setErrorMessage(detail);
       setFlowState('error');
     }
   }, [imageUri, sessionId]);
 
-  // ── Claude Vision Extraction Handler (Phase 3) ─────────────────────────────
+  // ── Extract Details Handler ───────────────────────────────────────────────
   const handleExtractDetails = useCallback(async () => {
     if (!submissionId) return;
-
     setFlowState('extracting');
     setErrorMessage(null);
 
@@ -210,14 +213,12 @@ export default function ReviewScreen({ route, navigation }: Props) {
       const extractResponse = await axios.post<SubmissionRecord>(
         `${API_BASE_URL}/submissions/${submissionId}/extract`,
         {},
-        { timeout: 45_000 } // Vision calls take longer (typically 4-10s)
+        { timeout: 45_000 }
       );
 
       if (extractResponse.data.extraction_status === 'success' && extractResponse.data.extraction_result) {
         const extData = extractResponse.data.extraction_result;
         setExtractionResult(extData);
-
-        // ── Phase 5: Initialize Form State from Extracted Details ────────────
         setFormName(extData.name || '');
         setFormRollNo(extData.roll_no || '');
         setFormBranch(extData.branch || '');
@@ -227,7 +228,6 @@ export default function ReviewScreen({ route, navigation }: Props) {
         setFormQuestionTotals(extData.question_totals || []);
         setFormGrandTotal(extData.total_marks_declared !== null ? String(extData.total_marks_declared) : '');
 
-        // ── Phase 4: Automatic Local Arithmetic Validation ───────────────────
         try {
           const valResponse = await axios.post<SubmissionRecord>(
             `${API_BASE_URL}/submissions/${submissionId}/validate`,
@@ -243,7 +243,7 @@ export default function ReviewScreen({ route, navigation }: Props) {
 
         setFlowState('extracted');
       } else {
-        const errorMsg = extractResponse.data.extraction_error ?? 'Claude failed to extract details.';
+        const errorMsg = extractResponse.data.extraction_error ?? 'AI failed to extract details.';
         setErrorMessage(errorMsg);
         setFlowState('error');
       }
@@ -263,7 +263,7 @@ export default function ReviewScreen({ route, navigation }: Props) {
     navigation.goBack();
   }, [navigation]);
 
-  // ── Phase 5: Debounced Live Re-Validation Hook ───────────────────────────
+  // ── Phase 5: Debounced live re-validation ─────────────────────────────────
   React.useEffect(() => {
     if (flowState !== 'extracted' || !submissionId) return;
 
@@ -296,24 +296,16 @@ export default function ReviewScreen({ route, navigation }: Props) {
       } catch (err) {
         console.warn('Live validation preview failed:', err);
       }
-    }, 450); // 450ms debounce delay
+    }, 450);
 
     return () => clearTimeout(delayTimer);
   }, [
-    formName,
-    formRollNo,
-    formBranch,
-    formSubject,
-    formDate,
-    formMarksEntries,
-    formQuestionTotals,
-    formGrandTotal,
-    flowState,
-    submissionId,
-    extractionResult,
+    formName, formRollNo, formBranch, formSubject, formDate,
+    formMarksEntries, formQuestionTotals, formGrandTotal,
+    flowState, submissionId, extractionResult,
   ]);
 
-  // ── Phase 5: Form Action Helpers ──────────────────────────────────────────
+  // ── Phase 5: Form action helpers ──────────────────────────────────────────
   const handleAddMarkEntry = () => {
     setFormMarksEntries((prev) => [...prev, { question_no: 1, part: 'a', marks: 0.0 }]);
   };
@@ -325,17 +317,10 @@ export default function ReviewScreen({ route, navigation }: Props) {
   const handleUpdateMarkEntry = (idx: number, key: 'question_no' | 'part' | 'marks', value: string) => {
     setFormMarksEntries((prev) =>
       prev.map((item, i) => {
-        if (i === idx) {
-          if (key === 'question_no') {
-            return { ...item, question_no: parseInt(value) || 1 };
-          }
-          if (key === 'part') {
-            return { ...item, part: value.toLowerCase().slice(0, 1) };
-          }
-          if (key === 'marks') {
-            return { ...item, marks: parseFloat(value) || 0.0 };
-          }
-        }
+        if (i !== idx) return item;
+        if (key === 'question_no') return { ...item, question_no: parseInt(value) || 1 };
+        if (key === 'part') return { ...item, part: value.toLowerCase().slice(0, 1) };
+        if (key === 'marks') return { ...item, marks: parseFloat(value) || 0.0 };
         return item;
       })
     );
@@ -343,12 +328,9 @@ export default function ReviewScreen({ route, navigation }: Props) {
 
   const handleUpdateQuestionTotal = (q_no: number, value: string) => {
     setFormQuestionTotals((prev) =>
-      prev.map((item) => {
-        if (item.question_no === q_no) {
-          return { ...item, total: parseFloat(value) || 0.0 };
-        }
-        return item;
-      })
+      prev.map((item) =>
+        item.question_no === q_no ? { ...item, total: parseFloat(value) || 0.0 } : item
+      )
     );
   };
 
@@ -356,7 +338,7 @@ export default function ReviewScreen({ route, navigation }: Props) {
     if (!submissionId) return;
 
     const saveAction = async () => {
-      setFlowState('uploading'); // displays loading indicators
+      setFlowState('uploading');
       try {
         const payload = {
           name: formName,
@@ -377,12 +359,7 @@ export default function ReviewScreen({ route, navigation }: Props) {
           field_confidence: extractionResult?.field_confidence || { name: 'high', roll_no: 'high' },
         };
 
-        await axios.put(
-          `${API_BASE_URL}/submissions/${submissionId}/extraction`,
-          payload
-        );
-
-        // Put succeeded and backend disk cleanup has run! Return to Capture batch session.
+        await axios.put(`${API_BASE_URL}/submissions/${submissionId}/extraction`, payload);
         navigation.navigate('Capture', { sessionId });
       } catch (err) {
         console.error('Save failed:', err);
@@ -391,12 +368,11 @@ export default function ReviewScreen({ route, navigation }: Props) {
       }
     };
 
-    // Warn teacher if validation is unresolved before saving
     if (validationResult && validationResult.overall_status !== 'valid') {
-      const discrepancyCount = validationResult.issues.length;
+      const count = validationResult.issues.length;
       Alert.alert(
         'Unresolved Discrepancies',
-        `There are still ${discrepancyCount} validation mismatches unresolved. Save anyway?`,
+        `There are still ${count} validation mismatch${count === 1 ? '' : 'es'} unresolved. Save anyway?`,
         [
           { text: 'Cancel', style: 'cancel' },
           { text: 'Save Anyway', onPress: saveAction },
@@ -407,21 +383,12 @@ export default function ReviewScreen({ route, navigation }: Props) {
     }
   };
 
-  // ── Helper: Format Marks Entries ──────────────────────────────────────────
-  const getFormattedMarksBreakdown = () => {
-    if (!extractionResult || !extractionResult.marks_entries) return 'None';
-    return extractionResult.marks_entries
-      .map((entry) => `${entry.question_no}${entry.part}-${entry.marks}`)
-      .join(', ');
-  };
-
-  // ── Render Helpers ─────────────────────────────────────────────────────────
   const isUploadingOrPrep = flowState === 'uploading' || flowState === 'preprocessing';
   const isWorking = isUploadingOrPrep || flowState === 'extracting';
 
   return (
     <View style={styles.root}>
-      {/* ── Image preview (Hidden once details are successfully extracted) ─── */}
+      {/* Image preview — hidden once extraction is complete */}
       {flowState !== 'extracted' && (
         <View style={styles.imageContainer}>
           <Image
@@ -431,83 +398,76 @@ export default function ReviewScreen({ route, navigation }: Props) {
             accessibilityLabel="Captured booklet preview"
           />
 
-          {/* Preprocessing Spinner Overlay */}
           {flowState === 'preprocessing' && (
             <View style={styles.processingOverlay}>
-              <ActivityIndicator size="large" color="#6366f1" />
-              <Text style={styles.processingOverlayText}>
-                Aligning and cleaning page…
-              </Text>
+              <ActivityIndicator size="large" color={ACCENT} />
+              <Text style={styles.processingOverlayText}>Aligning and cleaning page…</Text>
             </View>
           )}
 
-          {/* Claude Vision Extraction Spinner Overlay */}
           {flowState === 'extracting' && (
-            <View style={[styles.processingOverlay, styles.extractionOverlay]}>
-              <ActivityIndicator size="large" color="#ec4899" />
-              <Text style={[styles.processingOverlayText, styles.extractionOverlayText]}>
-                Claude is reading handwriting…
-              </Text>
+            <View style={styles.processingOverlay}>
+              <ActivityIndicator size="large" color={ACCENT} />
+              <Text style={styles.processingOverlayText}>Reading handwriting…</Text>
             </View>
           )}
         </View>
       )}
 
-      {/* ── Bottom action panel & Extracted results scroll container ──────── */}
-      <ScrollView
+      {/* ── Bottom panel with KeyboardAwareScrollView ── */}
+      <KeyboardAwareScrollView
         style={styles.panel}
         contentContainerStyle={styles.panelContent}
         keyboardShouldPersistTaps="handled"
+        enableOnAndroid={true}
+        extraScrollHeight={100}
+        enableResetScrollToCoords={false}
       >
-        {/* State: Extracted Results View (Read-Only Display) */}
+        {/* ── Extracted form ─────────────────────────────────────────────── */}
         {flowState === 'extracted' && extractionResult && (
           <View style={styles.extractedContainer}>
+            {/* Header row */}
             <View style={styles.extractedHeaderRow}>
-              <Text style={styles.successIcon}>✨</Text>
+              <Feather name="check-circle" size={18} color={SUCCESS_TEXT} />
               <Text style={styles.extractedHeaderTitle}>Extracted Details</Text>
+              <Text style={styles.extractedHeaderHint}>— edit any field to correct</Text>
             </View>
 
-            {/* ── Phase 4: Validation Summary Banner ─────────────────────────── */}
+            {/* ── Validation banner ─────────────────────────────────────── */}
             {validationResult && (
-              <View style={styles.validationNoticeContainer}>
+              <View>
                 {validationResult.overall_status === 'valid' && (
-                  <View style={[styles.validationBanner, styles.validBanner]}>
-                    <Text style={styles.validationBannerIcon}>✅</Text>
-                    <View style={styles.validationBannerTextContainer}>
-                      <Text style={styles.validTitle}>Arithmetic Validated</Text>
-                      <Text style={styles.validSub}>
-                        All question subparts and grand totals match perfectly.
-                      </Text>
+                  <View style={[styles.statusBanner, styles.successBanner]}>
+                    <Feather name="check-circle" size={16} color={SUCCESS_TEXT} />
+                    <View style={styles.bannerTextCol}>
+                      <Text style={styles.bannerTitle}>Arithmetic Validated</Text>
+                      <Text style={styles.bannerSub}>All sub-totals and grand total match.</Text>
                     </View>
                   </View>
                 )}
 
                 {validationResult.overall_status === 'mismatch' && (
-                  <View style={[styles.validationBanner, styles.mismatchBanner]}>
-                    <Text style={styles.validationBannerIcon}>❌</Text>
-                    <View style={styles.validationBannerTextContainer}>
-                      <Text style={styles.mismatchTitle}>Arithmetic Discrepancies</Text>
+                  <View style={[styles.statusBanner, styles.dangerBanner]}>
+                    <Feather name="alert-triangle" size={16} color={DANGER_TEXT} />
+                    <View style={styles.bannerTextCol}>
+                      <Text style={[styles.bannerTitle, { color: DANGER_TEXT }]}>Arithmetic Discrepancies</Text>
                       {validationResult.issues.map((issue, idx) => (
-                        <Text key={idx} style={styles.issueText}>
-                          • {issue}
-                        </Text>
+                        <Text key={idx} style={styles.bannerIssue}>• {issue}</Text>
                       ))}
                     </View>
                   </View>
                 )}
 
                 {validationResult.overall_status === 'incomplete' && (
-                  <View style={[styles.validationBanner, styles.incompleteBanner]}>
-                    <Text style={styles.validationBannerIcon}>⚠️</Text>
-                    <View style={styles.validationBannerTextContainer}>
-                      <Text style={styles.incompleteTitle}>Incomplete Marks Data</Text>
-                      <Text style={styles.incompleteSub}>
-                        Possible extraction gap. Questions present in one list are missing in the other:
+                  <View style={[styles.statusBanner, styles.infoBanner]}>
+                    <Feather name="info" size={16} color={INFO_TEXT} />
+                    <View style={styles.bannerTextCol}>
+                      <Text style={[styles.bannerTitle, { color: INFO_TEXT }]}>Incomplete Marks Data</Text>
+                      <Text style={styles.bannerSub}>
+                        Questions present in one list are missing from the other:
                       </Text>
                       {validationResult.issues.map((issue, idx) => (
-                        <Text key={idx} style={styles.issueText}>
-                          • {issue}
-                        </Text>
+                        <Text key={idx} style={styles.bannerIssue}>• {issue}</Text>
                       ))}
                     </View>
                   </View>
@@ -515,138 +475,133 @@ export default function ReviewScreen({ route, navigation }: Props) {
               </View>
             )}
 
-            {/* Metadata Fields */}
+            {/* ── Student Info card ─────────────────────────────────────── */}
             <View style={styles.card}>
-              <Text style={styles.cardHeader}>Student Info</Text>
+              <Text style={styles.cardLabel}>STUDENT INFO</Text>
 
-              {/* Name Field */}
-              <View
-                style={[
-                  styles.fieldRow,
-                  extractionResult.field_confidence.name === 'low' && styles.fieldWarningBorder,
-                ]}
-              >
-                <Text style={styles.fieldLabel}>Name:</Text>
+              <View style={[
+                styles.fieldRow,
+                extractionResult.field_confidence.name === 'low' && styles.fieldRowWarn,
+              ]}>
+                <Text style={styles.fieldLabel}>Name</Text>
                 <TextInput
                   style={styles.fieldInput}
                   value={formName}
                   onChangeText={setFormName}
                   placeholder="Student Name"
-                  placeholderTextColor="#64748b"
+                  placeholderTextColor={MUTED}
                 />
               </View>
 
-              {/* Roll No Field */}
-              <View
-                style={[
-                  styles.fieldRow,
-                  extractionResult.field_confidence.roll_no === 'low' && styles.fieldWarningBorder,
-                ]}
-              >
-                <Text style={styles.fieldLabel}>Roll No:</Text>
+              <View style={[
+                styles.fieldRow,
+                extractionResult.field_confidence.roll_no === 'low' && styles.fieldRowWarn,
+              ]}>
+                <Text style={styles.fieldLabel}>Roll No</Text>
                 <TextInput
                   style={styles.fieldInput}
                   value={formRollNo}
                   onChangeText={setFormRollNo}
                   placeholder="CS2026-99"
-                  placeholderTextColor="#64748b"
+                  placeholderTextColor={MUTED}
                 />
               </View>
 
-              {/* Branch */}
               <View style={styles.fieldRow}>
-                <Text style={styles.fieldLabel}>Branch:</Text>
+                <Text style={styles.fieldLabel}>Branch</Text>
                 <TextInput
                   style={styles.fieldInput}
                   value={formBranch}
                   onChangeText={setFormBranch}
                   placeholder="Branch"
-                  placeholderTextColor="#64748b"
+                  placeholderTextColor={MUTED}
                 />
               </View>
 
-              {/* Subject */}
               <View style={styles.fieldRow}>
-                <Text style={styles.fieldLabel}>Subject:</Text>
+                <Text style={styles.fieldLabel}>Subject</Text>
                 <TextInput
                   style={styles.fieldInput}
                   value={formSubject}
                   onChangeText={setFormSubject}
                   placeholder="Subject"
-                  placeholderTextColor="#64748b"
+                  placeholderTextColor={MUTED}
                 />
               </View>
 
-              {/* Date */}
               <View style={styles.fieldRow}>
-                <Text style={styles.fieldLabel}>Date:</Text>
+                <Text style={styles.fieldLabel}>Date</Text>
                 <TextInput
                   style={styles.fieldInput}
                   value={formDate}
                   onChangeText={setFormDate}
                   placeholder="YYYY-MM-DD"
-                  placeholderTextColor="#64748b"
+                  placeholderTextColor={MUTED}
                 />
               </View>
             </View>
 
-            {/* Marks Breakdown */}
+            {/* ── Sub-question marks card ───────────────────────────────── */}
             <View style={styles.card}>
-              <Text style={styles.cardHeader}>Sub-Question Marks</Text>
+              <Text style={styles.cardLabel}>SUB-QUESTION MARKS</Text>
+
               {formMarksEntries.length === 0 ? (
-                <Text style={styles.emptyText}>No marks entries. Tap "+ Add" below.</Text>
+                <Text style={styles.emptyText}>No entries yet. Tap "Add" below.</Text>
               ) : (
                 formMarksEntries.map((entry, idx) => (
-                  <View key={idx} style={styles.marksEditRow}>
-                    <Text style={styles.marksEditLabel}>Q: </Text>
+                  <View key={idx} style={styles.marksRow}>
+                    <Text style={styles.marksRowLabel}>Q</Text>
                     <TextInput
                       style={[styles.marksInput, styles.marksInputQ]}
                       value={String(entry.question_no)}
                       onChangeText={(val) => handleUpdateMarkEntry(idx, 'question_no', val)}
                       keyboardType="numeric"
                       placeholder="Q"
-                      placeholderTextColor="#64748b"
+                      placeholderTextColor={MUTED}
                     />
-                    <Text style={styles.marksEditLabel}>Part: </Text>
+                    <Text style={styles.marksRowLabel}>Part</Text>
                     <TextInput
                       style={[styles.marksInput, styles.marksInputPart]}
                       value={entry.part}
                       onChangeText={(val) => handleUpdateMarkEntry(idx, 'part', val)}
                       maxLength={1}
-                      placeholder="Part"
-                      placeholderTextColor="#64748b"
+                      placeholder="a"
+                      placeholderTextColor={MUTED}
                     />
-                    <Text style={styles.marksEditLabel}>Marks: </Text>
+                    <Text style={styles.marksRowLabel}>Marks</Text>
                     <TextInput
                       style={[styles.marksInput, styles.marksInputVal]}
                       value={String(entry.marks)}
                       onChangeText={(val) => handleUpdateMarkEntry(idx, 'marks', val)}
                       keyboardType="numeric"
-                      placeholder="Marks"
-                      placeholderTextColor="#64748b"
+                      placeholder="0"
+                      placeholderTextColor={MUTED}
                     />
                     <Pressable
-                      style={styles.deleteMarkButton}
+                      style={styles.deleteMarkBtn}
                       onPress={() => handleDeleteMarkEntry(idx)}
                       accessibilityLabel={`Delete entry ${idx + 1}`}
                     >
-                      <Text style={styles.deleteMarkText}>🗑️</Text>
+                      <Feather name="trash-2" size={15} color={DANGER_TEXT} />
                     </Pressable>
                   </View>
                 ))
               )}
+
               <Pressable
-                style={styles.addMarkButton}
+                style={styles.addMarkBtn}
                 onPress={handleAddMarkEntry}
-                accessibilityLabel="Add new subpart marks row"
+                accessibilityLabel="Add new sub-part marks row"
               >
-                <Text style={styles.addMarkButtonText}>+ Add Sub-part Mark</Text>
+                <Feather name="plus" size={14} color={ACCENT} style={{ marginRight: 6 }} />
+                <Text style={styles.addMarkBtnText}>Add Sub-part</Text>
               </Pressable>
             </View>
 
-            {/* Question Totals (transcribed totals vs declared) */}
+            {/* ── Examiner totals card ──────────────────────────────────── */}
             <View style={styles.card}>
-              <Text style={styles.cardHeader}>Examiner Totals</Text>
+              <Text style={styles.cardLabel}>EXAMINER TOTALS</Text>
+
               {formQuestionTotals.length === 0 ? (
                 <Text style={styles.emptyText}>No question totals detected.</Text>
               ) : (
@@ -654,29 +609,28 @@ export default function ReviewScreen({ route, navigation }: Props) {
                   const qVal = validationResult?.question_level.find(
                     (q) => q.question_no === tot.question_no
                   );
-
                   return (
                     <View
                       key={tot.question_no}
-                      style={[
-                        styles.totalRow,
-                        qVal && !qVal.match && styles.warningRowHighlight,
-                      ]}
+                      style={[styles.totalRow, qVal && !qVal.match && styles.totalRowWarn]}
                     >
-                      <Text style={styles.totalLabel}>Question {tot.question_no}:</Text>
-                      <View style={styles.row}>
+                      <Text style={styles.totalLabel}>Question {tot.question_no}</Text>
+                      <View style={styles.totalRightCol}>
                         <TextInput
                           style={styles.totalInput}
                           value={String(tot.total)}
                           onChangeText={(val) => handleUpdateQuestionTotal(tot.question_no, val)}
                           keyboardType="numeric"
                         />
-                        <Text style={styles.totalUnitText}> Marks</Text>
+                        <Text style={styles.totalUnit}>marks</Text>
                         {qVal && (
                           qVal.match ? (
-                            <Text style={styles.matchPassTag}>  ✅</Text>
+                            <Feather name="check-circle" size={14} color={SUCCESS_TEXT} style={{ marginLeft: 6 }} />
                           ) : (
-                            <Text style={styles.matchFailTag}>  ⚠️ (Sum: {qVal.computed_sum})</Text>
+                            <View style={styles.mismatchTag}>
+                              <Feather name="alert-triangle" size={12} color={WARN_TEXT} />
+                              <Text style={styles.mismatchTagText}>{qVal.computed_sum}</Text>
+                            </View>
                           )
                         )}
                       </View>
@@ -685,30 +639,31 @@ export default function ReviewScreen({ route, navigation }: Props) {
                 })
               )}
 
-              {/* Grand Total validation line */}
-              <View
-                style={[
-                  styles.totalRow,
-                  styles.grandTotalRow,
-                  validationResult && !validationResult.grand_total.match && styles.warningRowHighlight,
-                ]}
-              >
-                <Text style={styles.grandTotalLabel}>Declared Grand Total:</Text>
-                <View style={styles.row}>
+              {/* Grand total row */}
+              <View style={[
+                styles.totalRow,
+                styles.grandTotalRow,
+                validationResult && !validationResult.grand_total.match && styles.totalRowWarn,
+              ]}>
+                <Text style={styles.grandTotalLabel}>Grand Total</Text>
+                <View style={styles.totalRightCol}>
                   <TextInput
-                    style={[styles.totalInput, styles.grandTotalInputStyle]}
+                    style={[styles.totalInput, styles.grandTotalInput]}
                     value={formGrandTotal}
                     onChangeText={setFormGrandTotal}
                     keyboardType="numeric"
-                    placeholder="Grand Total"
-                    placeholderTextColor="#64748b"
+                    placeholder="—"
+                    placeholderTextColor={MUTED}
                   />
-                  <Text style={styles.totalUnitText}> Marks</Text>
+                  <Text style={styles.totalUnit}>marks</Text>
                   {validationResult && (
                     validationResult.grand_total.match ? (
-                      <Text style={styles.matchPassTag}>  ✅</Text>
+                      <Feather name="check-circle" size={14} color={SUCCESS_TEXT} style={{ marginLeft: 6 }} />
                     ) : (
-                      <Text style={styles.matchFailTag}>  ⚠️ (Sum: {validationResult.grand_total.computed_sum})</Text>
+                      <View style={styles.mismatchTag}>
+                        <Feather name="alert-triangle" size={12} color={WARN_TEXT} />
+                        <Text style={styles.mismatchTagText}>{validationResult.grand_total.computed_sum}</Text>
+                      </View>
                     )
                   )}
                 </View>
@@ -717,27 +672,27 @@ export default function ReviewScreen({ route, navigation }: Props) {
           </View>
         )}
 
-        {/* State: Preprocessing Banners (Shown before extraction) */}
+        {/* ── Pre-extraction status banners ──────────────────────────────── */}
         {flowState === 'preprocessed' && (
           <>
             {prepStatus === 'fallback' && (
-              <View style={styles.fallbackNotice}>
-                <View style={styles.alertHeader}>
-                  <Text style={styles.alertIcon}>📸</Text>
-                  <Text style={styles.fallbackTitle}>Guide Cropped & Enhanced</Text>
+              <View style={[styles.statusBanner, styles.warnBanner]}>
+                <Feather name="crop" size={16} color={WARN_TEXT} />
+                <View style={styles.bannerTextCol}>
+                  <Text style={[styles.bannerTitle, { color: WARN_TEXT }]}>Guide Cropped & Enhanced</Text>
+                  <Text style={styles.bannerSub}>
+                    Booklet was cropped to guide frame; deskew and contrast optimised.
+                  </Text>
                 </View>
-                <Text style={styles.fallbackBody}>
-                  Booklet was cropped to the guide frame. Deskew and contrast optimized.
-                </Text>
               </View>
             )}
 
             {prepStatus === 'success' && (
-              <View style={styles.successBanner}>
-                <Text style={styles.successIcon}>✨</Text>
-                <View style={styles.successTextContainer}>
-                  <Text style={styles.successTitle}>Successfully Preprocessed!</Text>
-                  <Text style={styles.successSub}>
+              <View style={[styles.statusBanner, styles.successBanner]}>
+                <Feather name="check-circle" size={16} color={SUCCESS_TEXT} />
+                <View style={styles.bannerTextCol}>
+                  <Text style={styles.bannerTitle}>Preprocessing Complete</Text>
+                  <Text style={styles.bannerSub}>
                     Perspective warp, rotation, and contrast enhanced.
                   </Text>
                 </View>
@@ -746,40 +701,41 @@ export default function ReviewScreen({ route, navigation }: Props) {
           </>
         )}
 
-        {/* State: Error Banner */}
+        {/* ── Error banner ───────────────────────────────────────────────── */}
         {flowState === 'error' && errorMessage && (
-          <View style={styles.errorBanner}>
-            <Text style={styles.alertIcon}>⚠️</Text>
-            <View style={styles.successTextContainer}>
-              <Text style={styles.errorTitle}>Error Occurred</Text>
-              <Text style={styles.errorSub}>{errorMessage}</Text>
+          <View style={[styles.statusBanner, styles.dangerBanner]}>
+            <Feather name="alert-triangle" size={16} color={DANGER_TEXT} />
+            <View style={styles.bannerTextCol}>
+              <Text style={[styles.bannerTitle, { color: DANGER_TEXT }]}>Error Occurred</Text>
+              <Text style={styles.bannerSub}>{errorMessage}</Text>
             </View>
           </View>
         )}
 
-        {/* ── Action Buttons Bottom Row ──────────────────────────────────────── */}
+        {/* ── Action buttons ─────────────────────────────────────────────── */}
         <View style={styles.buttonRow}>
-          {/* Retake / Cancel (Discard current submission) */}
+          {/* Cancel / Discard button */}
           <Pressable
             style={({ pressed }) => [
               styles.button,
-              styles.retakeButton,
+              styles.secondaryButton,
               (pressed || isWorking) && styles.buttonPressed,
             ]}
             onPress={handleRetake}
             disabled={isWorking}
           >
-            <Text style={styles.retakeButtonText}>
-              {flowState === 'extracted' ? '↩ Discard / Back' : '↩ Cancel'}
+            <Feather name="arrow-left" size={14} color={TEXT_MUTED} style={{ marginRight: 5 }} />
+            <Text style={styles.secondaryButtonText}>
+              {flowState === 'extracted' ? 'Discard' : 'Cancel'}
             </Text>
           </Pressable>
 
-          {/* Action trigger: Upload & Crop OR Extract details OR Retry */}
-          {flowState === 'idle' || flowState === 'error' || isUploadingOrPrep ? (
+          {/* Primary action: Upload / Extract / Retry / Confirm */}
+          {(flowState === 'idle' || flowState === 'error' || isUploadingOrPrep) ? (
             <Pressable
               style={({ pressed }) => [
                 styles.button,
-                styles.uploadButton,
+                styles.primaryButton,
                 isWorking && styles.buttonDisabled,
                 pressed && styles.buttonPressed,
               ]}
@@ -787,22 +743,24 @@ export default function ReviewScreen({ route, navigation }: Props) {
               disabled={isWorking}
             >
               {isUploadingOrPrep ? (
-                <View style={styles.row}>
-                  <ActivityIndicator color="#fff" size="small" style={styles.spinner} />
-                  <Text style={styles.uploadButtonText}>Processing…</Text>
-                </View>
+                <>
+                  <ActivityIndicator color="#fff" size="small" style={{ marginRight: 8 }} />
+                  <Text style={styles.primaryButtonText}>Processing…</Text>
+                </>
               ) : (
-                <Text style={styles.uploadButtonText}>
-                  {flowState === 'error' ? '↺ Retry Crop' : 'Process & Upload'}
-                </Text>
+                <>
+                  <Feather name={flowState === 'error' ? 'refresh-cw' : 'upload'} size={14} color="#fff" style={{ marginRight: 6 }} />
+                  <Text style={styles.primaryButtonText}>
+                    {flowState === 'error' ? 'Retry' : 'Process & Upload'}
+                  </Text>
+                </>
               )}
             </Pressable>
           ) : flowState === 'preprocessed' ? (
-            // Shown after image is ready on the server: triggers extraction
             <Pressable
               style={({ pressed }) => [
                 styles.button,
-                styles.extractButton,
+                styles.primaryButton,
                 flowState === 'extracting' && styles.buttonDisabled,
                 pressed && styles.buttonPressed,
               ]}
@@ -810,16 +768,18 @@ export default function ReviewScreen({ route, navigation }: Props) {
               disabled={flowState === 'extracting'}
             >
               {flowState === 'extracting' ? (
-                <View style={styles.row}>
-                  <ActivityIndicator color="#fff" size="small" style={styles.spinner} />
-                  <Text style={styles.uploadButtonText}>Extracting details…</Text>
-                </View>
+                <>
+                  <ActivityIndicator color="#fff" size="small" style={{ marginRight: 8 }} />
+                  <Text style={styles.primaryButtonText}>Extracting…</Text>
+                </>
               ) : (
-                <Text style={styles.uploadButtonText}>🔍 Extract Details</Text>
+                <>
+                  <Feather name="search" size={14} color="#fff" style={{ marginRight: 6 }} />
+                  <Text style={styles.primaryButtonText}>Extract Details</Text>
+                </>
               )}
             </Pressable>
           ) : flowState === 'extracted' ? (
-            // Shown after details are extracted: triggers final confirm and save
             <Pressable
               style={({ pressed }) => [
                 styles.button,
@@ -828,484 +788,259 @@ export default function ReviewScreen({ route, navigation }: Props) {
               ]}
               onPress={handleConfirmAndSave}
             >
-              <Text style={styles.confirmButtonText}>💾 Confirm & Save</Text>
+              <Feather name="save" size={14} color="#fff" style={{ marginRight: 6 }} />
+              <Text style={styles.primaryButtonText}>Confirm & Save</Text>
             </Pressable>
           ) : null}
         </View>
-      </ScrollView>
+      </KeyboardAwareScrollView>
     </View>
   );
 }
 
-// ── Styles ───────────────────────────────────────────────────────────────────
-
+// ── Styles ────────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
-  root: {
-    flex: 1,
-    backgroundColor: '#0f0f1a',
-  },
+  root: { flex: 1, backgroundColor: BG },
 
-  // ── Image preview ──────────────────────────────────────────────────────────
+  // ── Image preview ─────────────────────────────────────────────────────────
   imageContainer: {
     flex: 1,
-    backgroundColor: '#0f0f1a',
+    backgroundColor: '#000',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 16,
-    paddingTop: 12,
     position: 'relative',
   },
-  image: {
-    width: '100%',
-    height: '100%',
-  },
+  image: { width: '100%', height: '100%' },
   processingOverlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(15, 15, 26, 0.8)',
+    backgroundColor: 'rgba(11,11,14,0.82)',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 12,
   },
-  extractionOverlay: {
-    backgroundColor: 'rgba(15, 15, 26, 0.85)',
-  },
-  processingOverlayText: {
-    color: '#a5b4fc',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  extractionOverlayText: {
-    color: '#f472b6',
-  },
+  processingOverlayText: { color: '#a5a0ff', fontSize: 15, fontWeight: '600' },
 
-  // ── Action panel ───────────────────────────────────────────────────────────
+  // ── Panel / scroll container ──────────────────────────────────────────────
   panel: {
     flex: 1,
-    backgroundColor: '#1a1a2e',
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
+    backgroundColor: PANEL_BG,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.06)',
+    borderColor: BORDER,
   },
   panelContent: {
-    paddingHorizontal: 20,
+    paddingHorizontal: 16,
     paddingTop: 20,
-    paddingBottom: 36,
+    paddingBottom: 48,
     gap: 16,
   },
 
-  // ── Banners ────────────────────────────────────────────────────────────────
-  successBanner: {
-    backgroundColor: '#064e3b',
-    borderWidth: 1,
-    borderColor: '#047857',
-    borderRadius: 12,
-    padding: 14,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-  },
-  successIcon: { fontSize: 24 },
-  successTextContainer: { flex: 1 },
-  successTitle: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#34d399',
-  },
-  successSub: {
-    fontSize: 12,
-    color: '#a7f3d0',
-    marginTop: 2,
-  },
-
-  fallbackNotice: {
-    backgroundColor: '#3b250a',
-    borderWidth: 1,
-    borderColor: '#78350f',
-    borderRadius: 12,
-    padding: 14,
-    gap: 6,
-  },
-  alertHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  alertIcon: { fontSize: 20 },
-  fallbackTitle: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#fbbf24',
-  },
-  fallbackBody: {
-    fontSize: 12,
-    color: '#fde68a',
-    lineHeight: 18,
-  },
-
-  errorBanner: {
-    backgroundColor: '#451a1a',
-    borderWidth: 1,
-    borderColor: '#991b1b',
-    borderRadius: 12,
-    padding: 14,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-  },
-  errorIcon: { fontSize: 24 },
-  errorTextContainer: { flex: 1 },
-  errorTitle: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#f87171',
-  },
-  errorDetail: {
-    fontSize: 12,
-    color: '#fca5a5',
-    marginTop: 2,
-  },
-
-  // ── Extracted Results Layout (Phase 3) ─────────────────────────────────────
-  extractedContainer: {
-    gap: 16,
-  },
+  // ── Extracted header row ──────────────────────────────────────────────────
+  extractedContainer: { gap: 16 },
   extractedHeaderRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
+    gap: 8,
     marginBottom: 4,
   },
-  extractedHeaderTitle: {
-    color: '#e2e8f0',
-    fontSize: 18,
-    fontWeight: '700',
-  },
-  card: {
-    backgroundColor: '#111122',
+  extractedHeaderTitle: { color: TEXT, fontSize: 17, fontWeight: '700' },
+  extractedHeaderHint: { color: TEXT_MUTED, fontSize: 12, fontWeight: '400', flex: 1 },
+
+  // ── Status banners ────────────────────────────────────────────────────────
+  statusBanner: {
+    flexDirection: 'row',
+    padding: 14,
+    borderRadius: 12,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.04)',
+    gap: 10,
+    alignItems: 'flex-start',
+  },
+  successBanner: { backgroundColor: SUCCESS_BG, borderColor: SUCCESS_BORDER },
+  dangerBanner: { backgroundColor: DANGER_BG, borderColor: DANGER_BORDER },
+  warnBanner: { backgroundColor: WARN_BG, borderColor: WARN_BORDER },
+  infoBanner: { backgroundColor: INFO_BG, borderColor: INFO_BORDER },
+  bannerTextCol: { flex: 1, gap: 3 },
+  bannerTitle: { fontSize: 13, fontWeight: '700', color: SUCCESS_TEXT },
+  bannerSub: { fontSize: 12, color: TEXT_MUTED, lineHeight: 17 },
+  bannerIssue: { fontSize: 12, color: TEXT_MUTED, lineHeight: 17 },
+
+  // ── Cards ─────────────────────────────────────────────────────────────────
+  card: {
+    backgroundColor: SURFACE,
+    borderWidth: 1,
+    borderColor: BORDER,
     borderRadius: 14,
-    padding: 16,
-    gap: 12,
+    padding: 14,
+    gap: 10,
   },
-  cardHeader: {
-    fontSize: 14,
+  cardLabel: {
+    fontSize: 11,
     fontWeight: '700',
-    color: '#818cf8',
-    borderBottomWidth: 1,
-    borderColor: 'rgba(255,255,255,0.06)',
+    color: MUTED,
+    letterSpacing: 1,
     paddingBottom: 6,
-    marginBottom: 4,
+    borderBottomWidth: 1,
+    borderColor: BORDER,
   },
+
+  // ── Field rows ────────────────────────────────────────────────────────────
   fieldRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingVertical: 4,
+    paddingVertical: 2,
+    paddingHorizontal: 4,
     borderRadius: 8,
-    paddingHorizontal: 6,
   },
-  fieldWarningBorder: {
+  fieldRowWarn: {
     borderWidth: 1,
-    borderColor: '#ea580c',
-    backgroundColor: 'rgba(234, 88, 12, 0.08)',
+    borderColor: WARN_BORDER,
+    backgroundColor: WARN_BG,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
   },
-  fieldLabel: {
-    color: '#94a3b8',
+  fieldLabel: { color: TEXT_MUTED, fontSize: 13, fontWeight: '500', width: 64 },
+  fieldInput: {
+    flex: 1,
+    color: TEXT,
     fontSize: 14,
     fontWeight: '600',
+    textAlign: 'right',
+    paddingVertical: 6,
+    paddingHorizontal: 8,
+    backgroundColor: 'rgba(255,255,255,0.03)',
+    borderRadius: 7,
+    marginLeft: 8,
+    borderWidth: 1,
+    borderColor: BORDER,
   },
-  fieldValueContainer: {
-    alignItems: 'flex-end',
-    gap: 2,
+  emptyText: { color: MUTED, fontSize: 12 },
+
+  // ── Marks rows ────────────────────────────────────────────────────────────
+  marksRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 3,
   },
-  fieldValue: {
-    color: '#f8fafc',
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  warningTag: {
-    color: '#fb923c',
-    fontSize: 11,
-    fontWeight: '600',
-  },
-  marksBreakdownText: {
-    color: '#cbd5e1',
-    fontSize: 15,
-    fontFamily: Platform.OS === 'ios' ? 'Courier New' : 'monospace',
-    lineHeight: 22,
-  },
-  emptyText: {
-    color: '#64748b',
+  marksRowLabel: { color: MUTED, fontSize: 11, fontWeight: '600' },
+  marksInput: {
+    color: TEXT,
     fontSize: 13,
+    backgroundColor: 'rgba(255,255,255,0.03)',
+    borderRadius: 6,
+    paddingVertical: 7,
+    paddingHorizontal: 7,
+    textAlign: 'center',
+    borderWidth: 1,
+    borderColor: BORDER,
   },
+  marksInputQ: { flex: 1.5 },
+  marksInputPart: { flex: 1.5 },
+  marksInputVal: { flex: 2 },
+  deleteMarkBtn: {
+    width: 32,
+    height: 32,
+    backgroundColor: DANGER_BG,
+    borderRadius: 7,
+    borderWidth: 1,
+    borderColor: DANGER_BORDER,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  addMarkBtn: {
+    flexDirection: 'row',
+    marginTop: 4,
+    paddingVertical: 10,
+    backgroundColor: 'rgba(95,90,246,0.06)',
+    borderRadius: 9,
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    borderColor: `${ACCENT}50`,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  addMarkBtnText: { color: ACCENT, fontSize: 13, fontWeight: '600' },
+
+  // ── Totals rows ───────────────────────────────────────────────────────────
   totalRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    paddingVertical: 4,
+    alignItems: 'center',
+    paddingVertical: 5,
   },
-  totalLabel: {
-    color: '#94a3b8',
-    fontSize: 13,
+  totalRowWarn: {
+    backgroundColor: WARN_BG,
+    borderWidth: 1,
+    borderColor: WARN_BORDER,
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    marginVertical: 2,
   },
-  totalValue: {
-    color: '#cbd5e1',
+  totalLabel: { color: TEXT_MUTED, fontSize: 13, fontWeight: '500' },
+  totalRightCol: { flexDirection: 'row', alignItems: 'center' },
+  totalInput: {
+    color: TEXT,
     fontSize: 13,
     fontWeight: '600',
+    backgroundColor: 'rgba(255,255,255,0.03)',
+    borderRadius: 6,
+    paddingVertical: 4,
+    paddingHorizontal: 7,
+    width: 60,
+    textAlign: 'center',
+    borderWidth: 1,
+    borderColor: BORDER,
   },
+  totalUnit: { color: TEXT_MUTED, fontSize: 12, marginLeft: 5 },
   grandTotalRow: {
     marginTop: 8,
+    paddingTop: 12,
     borderTopWidth: 1,
-    borderColor: 'rgba(255,255,255,0.08)',
-    paddingTop: 8,
+    borderColor: BORDER,
   },
-  grandTotalLabel: {
-    color: '#e2e8f0',
-    fontSize: 14,
-    fontWeight: '700',
+  grandTotalLabel: { color: TEXT, fontSize: 14, fontWeight: '700' },
+  grandTotalInput: { color: TEXT, fontSize: 14, fontWeight: '700' },
+  mismatchTag: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: WARN_BG,
+    borderWidth: 1,
+    borderColor: WARN_BORDER,
+    borderRadius: 5,
+    paddingHorizontal: 5,
+    paddingVertical: 2,
+    marginLeft: 6,
+    gap: 3,
   },
-  grandTotalValue: {
-    color: '#ec4899',
-    fontSize: 15,
-    fontWeight: '700',
-  },
+  mismatchTagText: { color: WARN_TEXT, fontSize: 11, fontWeight: '600' },
 
-  // ── Buttons ────────────────────────────────────────────────────────────────
+  // ── Buttons ───────────────────────────────────────────────────────────────
   buttonRow: {
     flexDirection: 'row',
-    gap: 12,
+    gap: 10,
     marginTop: 4,
   },
   button: {
     flex: 1,
-    paddingVertical: 15,
+    flexDirection: 'row',
+    paddingVertical: 14,
+    paddingHorizontal: 12,
     borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
-    minHeight: 52,
+    minHeight: 50,
   },
-  buttonPressed: {
-    opacity: 0.75,
-    transform: [{ scale: 0.98 }],
-  },
-  buttonDisabled: {
-    opacity: 0.5,
-  },
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  spinner: {
-    marginRight: 8,
-  },
-
-  retakeButton: {
-    backgroundColor: '#1e1e3a',
-    borderWidth: 1.5,
-    borderColor: '#4f46e5',
-  },
-  retakeButtonText: {
-    color: '#a5b4fc',
-    fontSize: 15,
-    fontWeight: '600',
-  },
-
-  uploadButton: {
-    backgroundColor: '#4f46e5',
-  },
-  uploadButtonText: {
-    color: '#fff',
-    fontSize: 15,
-    fontWeight: '700',
-  },
-
-  extractButton: {
-    backgroundColor: '#ec4899',
-  },
-
-  // ── Phase 4 Validation UI Styles ──────────────────────────────────────────
-  validationNoticeContainer: {
-    marginBottom: 16,
-    borderRadius: 14,
-    overflow: 'hidden',
-  },
-  validationBanner: {
-    flexDirection: 'row',
-    padding: 16,
-    borderRadius: 14,
-    borderWidth: 1.5,
-    gap: 12,
-  },
-  validationBannerIcon: {
-    fontSize: 22,
-  },
-  validationBannerTextContainer: {
-    flex: 1,
-    gap: 4,
-  },
-  validBanner: {
-    backgroundColor: 'rgba(34, 197, 94, 0.08)',
-    borderColor: '#22c55e',
-  },
-  validTitle: {
-    color: '#4ade80',
-    fontSize: 15,
-    fontWeight: '700',
-  },
-  validSub: {
-    color: '#a7f3d0',
-    fontSize: 13,
-    lineHeight: 18,
-  },
-  mismatchBanner: {
-    backgroundColor: 'rgba(239, 68, 68, 0.08)',
-    borderColor: '#ef4444',
-  },
-  mismatchTitle: {
-    color: '#f87171',
-    fontSize: 15,
-    fontWeight: '700',
-  },
-  incompleteBanner: {
-    backgroundColor: 'rgba(59, 130, 246, 0.08)',
-    borderColor: '#3b82f6',
-  },
-  incompleteTitle: {
-    color: '#60a5fa',
-    fontSize: 15,
-    fontWeight: '700',
-  },
-  incompleteSub: {
-    color: '#93c5fd',
-    fontSize: 13,
-    lineHeight: 18,
-    marginBottom: 4,
-  },
-  issueText: {
-    color: '#cbd5e1',
-    fontSize: 13,
-    lineHeight: 18,
-  },
-  warningRowHighlight: {
-    backgroundColor: 'rgba(239, 68, 68, 0.12)',
+  buttonPressed: { opacity: 0.75, transform: [{ scale: 0.98 }] },
+  buttonDisabled: { opacity: 0.5 },
+  secondaryButton: {
+    backgroundColor: 'transparent',
     borderWidth: 1,
-    borderColor: '#ef4444',
-    borderRadius: 8,
-    paddingHorizontal: 8,
-    paddingVertical: 6,
-    marginVertical: 2,
+    borderColor: BORDER,
   },
-  matchPassTag: {
-    color: '#22c55e',
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  matchFailTag: {
-    color: '#f87171',
-    fontSize: 12,
-    fontWeight: '700',
-  },
-
-  // ── Phase 5 Form Input Styles ─────────────────────────────────────────────
-  fieldInput: {
-    flex: 1,
-    color: '#f8fafc',
-    fontSize: 14,
-    fontWeight: '700',
-    textAlign: 'right',
-    paddingVertical: 4,
-    paddingHorizontal: 8,
-    backgroundColor: 'rgba(255,255,255,0.03)',
-    borderRadius: 6,
-    marginLeft: 12,
-  },
-  marksEditRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingVertical: 4,
-  },
-  marksEditLabel: {
-    color: '#64748b',
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  marksInput: {
-    color: '#f8fafc',
-    fontSize: 14,
-    backgroundColor: 'rgba(255,255,255,0.03)',
-    borderRadius: 6,
-    paddingVertical: 6,
-    paddingHorizontal: 8,
-    textAlign: 'center',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.08)',
-  },
-  marksInputQ: {
-    flex: 1.5,
-  },
-  marksInputPart: {
-    flex: 1.5,
-  },
-  marksInputVal: {
-    flex: 2,
-  },
-  deleteMarkButton: {
-    padding: 8,
-    backgroundColor: 'rgba(239, 68, 68, 0.1)',
-    borderRadius: 6,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  deleteMarkText: {
-    fontSize: 14,
-  },
-  addMarkButton: {
-    marginTop: 8,
-    paddingVertical: 10,
-    backgroundColor: 'rgba(99, 102, 241, 0.12)',
-    borderRadius: 8,
-    borderWidth: 1.5,
-    borderStyle: 'dashed',
-    borderColor: '#6366f1',
-    alignItems: 'center',
-  },
-  addMarkButtonText: {
-    color: '#a5b4fc',
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  totalInput: {
-    color: '#cbd5e1',
-    fontSize: 13,
-    fontWeight: '600',
-    backgroundColor: 'rgba(255,255,255,0.03)',
-    borderRadius: 6,
-    paddingVertical: 2,
-    paddingHorizontal: 6,
-    width: 60,
-    textAlign: 'center',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.08)',
-  },
-  grandTotalInputStyle: {
-    color: '#ec4899',
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  totalUnitText: {
-    color: '#94a3b8',
-    fontSize: 13,
-    marginLeft: 4,
-  },
-  confirmButton: {
-    backgroundColor: '#10b981',
-  },
-  confirmButtonText: {
-    color: '#fff',
-    fontSize: 15,
-    fontWeight: '700',
-  },
+  secondaryButtonText: { color: TEXT_MUTED, fontSize: 14, fontWeight: '600' },
+  primaryButton: { backgroundColor: ACCENT },
+  primaryButtonText: { color: '#fff', fontSize: 15, fontWeight: '700' },
+  confirmButton: { backgroundColor: '#059669' },
 });
