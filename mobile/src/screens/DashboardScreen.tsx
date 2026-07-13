@@ -29,6 +29,14 @@ interface SetMetadata {
   row_count: number;
 }
 
+interface SetRowRecord {
+  submission_id: string;
+  name: string;
+  roll_no: string;
+  total_marks: number;
+  validation_status: string;
+}
+
 export default function DashboardScreen({ navigation }: Props) {
   const [sets, setSets] = useState<SetMetadata[]>([]);
   const [loading, setLoading] = useState(true);
@@ -36,6 +44,12 @@ export default function DashboardScreen({ navigation }: Props) {
   // States for cross-platform set creation modal
   const [createModalVisible, setCreateModalVisible] = useState(false);
   const [newSetName, setNewSetName] = useState('');
+
+  // States for View Rows modal
+  const [viewRowsModalVisible, setViewRowsModalVisible] = useState(false);
+  const [viewRowsList, setViewRowsList] = useState<SetRowRecord[]>([]);
+  const [viewRowsLoading, setViewRowsLoading] = useState(false);
+  const [viewRowsSetName, setViewRowsSetName] = useState('');
 
   const currentSetFileUri = `${FileSystem.documentDirectory}current_set.json`;
 
@@ -79,7 +93,6 @@ export default function DashboardScreen({ navigation }: Props) {
 
       const newSet = res.data;
       
-      // Persist currently selected set ID locally as a UI convenience
       try {
         await FileSystem.writeAsStringAsync(
           currentSetFileUri,
@@ -108,6 +121,66 @@ export default function DashboardScreen({ navigation }: Props) {
       console.warn('Failed to save selected set ID locally:', storeErr);
     }
     navigation.navigate('Capture', { setId });
+  };
+
+  const handleViewRows = async (set: SetMetadata) => {
+    setViewRowsSetName(set.name);
+    setViewRowsList([]);
+    setViewRowsModalVisible(true);
+    setViewRowsLoading(true);
+    try {
+      const res = await axios.get<SetRowRecord[]>(
+        `${API_BASE_URL}/submissions/sets/${set.set_id}/rows`
+      );
+      setViewRowsList(res.data);
+    } catch (err) {
+      console.error('Failed to fetch set rows:', err);
+      Alert.alert('Error', 'Could not load confirmed booklet rows for this set.');
+      setViewRowsModalVisible(false);
+    } finally {
+      setViewRowsLoading(false);
+    }
+  };
+
+  const handleDeleteSet = (set: SetMetadata) => {
+    Alert.alert(
+      'Delete Set',
+      `Delete '${set.name}'? This cannot be undone. All associated submissions and spreadsheet reports will be deleted.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              setLoading(true);
+              await axios.delete(`${API_BASE_URL}/submissions/sets/${set.set_id}`);
+              
+              // Immediately remove from lists without requiring full refresh
+              setSets((prev) => prev.filter((s) => s.set_id !== set.set_id));
+              
+              // Clear current local set persistence if deleted
+              try {
+                const stored = await FileSystem.readAsStringAsync(currentSetFileUri);
+                const { setId } = JSON.parse(stored);
+                if (setId === set.set_id) {
+                  await FileSystem.deleteAsync(currentSetFileUri, { idempotent: true });
+                }
+              } catch (clearErr) {
+                // Ignore if file doesn't exist
+              }
+
+              Alert.alert('Deleted', `Set '${set.name}' has been deleted.`);
+            } catch (err) {
+              console.error('Failed to delete set:', err);
+              Alert.alert('Error', 'Could not delete the selected set.');
+            } finally {
+              setLoading(false);
+            }
+          },
+        },
+      ]
+    );
   };
 
   const handleShareSetSpreadsheet = async (set: SetMetadata) => {
@@ -192,7 +265,6 @@ export default function DashboardScreen({ navigation }: Props) {
             <ActivityIndicator size="large" color={ACCENT} />
           </View>
         ) : sets.length === 0 ? (
-          /* Empty state */
           <View style={styles.emptyCard}>
             <Feather name="inbox" size={40} color={MUTED} />
             <Text style={styles.emptyTitle}>No Sets Created Yet</Text>
@@ -229,7 +301,7 @@ export default function DashboardScreen({ navigation }: Props) {
 
               <View style={styles.divider} />
 
-              {/* Share/Download spreadsheet */}
+              {/* Actions row: download, view rows, delete */}
               <View style={styles.actionRow}>
                 <Pressable
                   style={({ pressed }) => [styles.actionBtn, styles.shareBtn, pressed && styles.btnPressed]}
@@ -238,6 +310,22 @@ export default function DashboardScreen({ navigation }: Props) {
                 >
                   <Feather name="share-2" size={14} color="#fff" style={styles.btnIcon} />
                   <Text style={styles.shareBtnText}>Download & Share</Text>
+                </Pressable>
+
+                <Pressable
+                  style={({ pressed }) => [styles.iconBtn, pressed && styles.btnPressed]}
+                  onPress={() => handleViewRows(item)}
+                  accessibilityLabel={`View confirmed rows for ${item.name}`}
+                >
+                  <Feather name="eye" size={16} color={TEXT} />
+                </Pressable>
+
+                <Pressable
+                  style={({ pressed }) => [styles.iconBtn, styles.deleteBtn, pressed && styles.btnPressed]}
+                  onPress={() => handleDeleteSet(item)}
+                  accessibilityLabel={`Delete set ${item.name}`}
+                >
+                  <Feather name="trash-2" size={16} color="#f87171" />
                 </Pressable>
               </View>
             </View>
@@ -290,6 +378,70 @@ export default function DashboardScreen({ navigation }: Props) {
                 <Text style={styles.modalSaveText}>Create Set</Text>
               </Pressable>
             </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* View Rows Modal */}
+      <Modal
+        visible={viewRowsModalVisible}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setViewRowsModalVisible(false)}
+      >
+        <View style={styles.modalBg}>
+          <View style={[styles.modalContent, { maxHeight: '80%' }]}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle} numberOfLines={1}>
+                {viewRowsSetName}
+              </Text>
+              <Pressable onPress={() => setViewRowsModalVisible(false)}>
+                <Feather name="x" size={20} color={TEXT_MUTED} />
+              </Pressable>
+            </View>
+
+            {viewRowsLoading ? (
+              <ActivityIndicator size="large" color={ACCENT} style={{ marginVertical: 32 }} />
+            ) : viewRowsList.length === 0 ? (
+              <Text style={styles.noRowsText}>No confirmed booklet entries in this set yet.</Text>
+            ) : (
+              <ScrollView style={styles.rowsScroll} contentContainerStyle={styles.rowsContainer}>
+                <View style={styles.tableHeader}>
+                  <Text style={[styles.tableHeaderCell, { flex: 2.2 }]}>Student Name</Text>
+                  <Text style={[styles.tableHeaderCell, { flex: 1.8 }]}>Roll No</Text>
+                  <Text style={[styles.tableHeaderCell, { flex: 1, textAlign: 'center' }]}>Marks</Text>
+                  <Text style={[styles.tableHeaderCell, { flex: 1, textAlign: 'right' }]}>Status</Text>
+                </View>
+                {viewRowsList.map((row) => (
+                  <View key={row.submission_id} style={styles.tableRow}>
+                    <Text style={[styles.tableCell, { flex: 2.2, fontWeight: '600' }]} numberOfLines={1}>
+                      {row.name}
+                    </Text>
+                    <Text style={[styles.tableCell, { flex: 1.8 }]} numberOfLines={1}>
+                      {row.roll_no}
+                    </Text>
+                    <Text style={[styles.tableCell, { flex: 1, textAlign: 'center' }]}>
+                      {row.total_marks}
+                    </Text>
+                    <View style={{ flex: 1, alignItems: 'flex-end' }}>
+                      <Text style={[
+                        styles.valBadge,
+                        row.validation_status === 'valid' ? styles.valValid : styles.valMismatch
+                      ]}>
+                        {row.validation_status === 'valid' ? 'Valid' : 'Mismatch'}
+                      </Text>
+                    </View>
+                  </View>
+                ))}
+              </ScrollView>
+            )}
+
+            <Pressable
+              style={({ pressed }) => [styles.primaryBtn, pressed && styles.btnPressed]}
+              onPress={() => setViewRowsModalVisible(false)}
+            >
+              <Text style={styles.primaryBtnText}>Close</Text>
+            </Pressable>
           </View>
         </View>
       </Modal>
@@ -390,7 +542,7 @@ const styles = StyleSheet.create({
   badgeText: { color: ACCENT, fontSize: 12, fontWeight: '600' },
   divider: { height: 1, backgroundColor: BORDER },
 
-  actionRow: { flexDirection: 'row', gap: 8 },
+  actionRow: { flexDirection: 'row', gap: 8, alignItems: 'center' },
   actionBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -401,6 +553,21 @@ const styles = StyleSheet.create({
   btnIcon: { marginRight: 5 },
   shareBtn: { flex: 1, backgroundColor: ACCENT },
   shareBtnText: { color: '#fff', fontSize: 13, fontWeight: '600' },
+
+  iconBtn: {
+    width: 36,
+    height: 36,
+    backgroundColor: '#1b1b24',
+    borderWidth: 1,
+    borderColor: BORDER,
+    borderRadius: 9,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  deleteBtn: {
+    backgroundColor: 'rgba(224,90,90,0.08)',
+    borderColor: 'rgba(224,90,90,0.25)',
+  },
 
   primaryBtn: {
     flexDirection: 'row',
@@ -432,7 +599,12 @@ const styles = StyleSheet.create({
     padding: 20,
     gap: 16,
   },
-  modalTitle: { fontSize: 17, fontWeight: '700', color: TEXT, textAlign: 'center' },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  modalTitle: { fontSize: 17, fontWeight: '700', color: TEXT, flex: 1, marginRight: 8 },
   modalDesc: { fontSize: 13, color: TEXT_MUTED, textAlign: 'center', lineHeight: 18 },
   modalInput: {
     backgroundColor: '#0f0f14',
@@ -456,4 +628,58 @@ const styles = StyleSheet.create({
   modalCancelText: { color: TEXT_MUTED, fontWeight: '600' },
   modalSaveBtn: { backgroundColor: ACCENT },
   modalSaveText: { color: '#fff', fontWeight: '700' },
+
+  noRowsText: {
+    color: TEXT_MUTED,
+    fontSize: 13,
+    textAlign: 'center',
+    paddingVertical: 32,
+  },
+  rowsScroll: {
+    width: '100%',
+    maxHeight: 300,
+  },
+  rowsContainer: {
+    gap: 8,
+  },
+  tableHeader: {
+    flexDirection: 'row',
+    borderBottomWidth: 1,
+    borderColor: BORDER,
+    paddingBottom: 8,
+    marginBottom: 4,
+  },
+  tableHeaderCell: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: MUTED,
+    letterSpacing: 0.5,
+  },
+  tableRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 6,
+    borderBottomWidth: 0.5,
+    borderColor: BORDER,
+  },
+  tableCell: {
+    fontSize: 13,
+    color: TEXT,
+  },
+  valBadge: {
+    fontSize: 10,
+    fontWeight: '700',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    overflow: 'hidden',
+  },
+  valValid: {
+    backgroundColor: 'rgba(52,199,89,0.12)',
+    color: '#34c759',
+  },
+  valMismatch: {
+    backgroundColor: 'rgba(255,149,0,0.12)',
+    color: '#ff9500',
+  },
 });

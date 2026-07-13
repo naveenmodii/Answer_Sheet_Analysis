@@ -255,6 +255,83 @@ async def get_set_status(set_id: str):
 
 
 @router.get(
+    "/sets/{set_id}/rows",
+    summary="Get confirmed row records for a scan set",
+)
+async def get_set_rows(set_id: str):
+    """
+    Returns Name, Roll No, Total Marks, and Validation Status for all confirmed booklets.
+    """
+    from app.services.database import get_set, get_set_submissions
+    set_data = get_set(set_id)
+    if not set_data:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Set not found"
+        )
+    
+    submissions = get_set_submissions(set_id, confirmed_only=True)
+    rows = []
+    for sub in submissions:
+        name = "Unknown"
+        roll_no = "Unknown"
+        total_marks = 0.0
+        val_status = "Valid"
+        
+        if sub.extraction_result:
+            name = sub.extraction_result.name or "Unknown"
+            roll_no = sub.extraction_result.roll_no or "Unknown"
+            total_marks = sub.extraction_result.total_marks_declared
+            if total_marks is None:
+                total_marks = 0.0
+        
+        if sub.validation_result:
+            val_status = sub.validation_result.overall_status or "Valid"
+        
+        rows.append({
+            "submission_id": sub.submission_id,
+            "name": name,
+            "roll_no": roll_no,
+            "total_marks": total_marks,
+            "validation_status": val_status
+        })
+    return rows
+
+
+@router.delete(
+    "/sets/{set_id}",
+    summary="Delete a set and its associated submissions/spreadsheets",
+)
+async def delete_scan_set(set_id: str):
+    """
+    Removes the Set record from the database, its submissions, and deletes its .xlsx file.
+    """
+    from app.services.database import get_set, delete_set
+    from pathlib import Path
+    
+    set_data = get_set(set_id)
+    if not set_data:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Set not found"
+        )
+    
+    # 1. Delete database tables entries
+    delete_set(set_id)
+    
+    # 2. Delete Excel file from disk if it exists
+    EXPORT_DIR = Path(__file__).parent.parent.parent / "exports"
+    set_file_path = EXPORT_DIR / f"{set_id}.xlsx"
+    try:
+        if set_file_path.exists():
+            set_file_path.unlink()
+    except Exception as e:
+        logger.error(f"Failed to delete Excel sheet on disk for set {set_id}: {e}")
+        
+    return {"status": "success", "message": f"Set '{set_data['name']}' deleted successfully."}
+
+
+@router.get(
     "/{submission_id}",
     response_model=SubmissionRecord,
     summary="Retrieve a submission record",
@@ -326,13 +403,13 @@ async def preprocess_submission(submission_id: str) -> SubmissionRecord:
     record.processed_image_path = str(processed_path)
     record.status = "processing" if status_result == "success" else "error" if status_result == "fallback" else record.status
 
-    # Retrieve associated session_id first to satisfy FK constraint
+    # Retrieve associated set_id first to satisfy FK constraint
     conn = get_db_connection()
-    row = conn.execute("SELECT session_id FROM submissions WHERE submission_id = ?", (submission_id,)).fetchone()
-    session_id = row["session_id"] if row else "unknown"
+    row = conn.execute("SELECT set_id FROM submissions WHERE submission_id = ?", (submission_id,)).fetchone()
+    set_id = row["set_id"] if row else "unknown"
     conn.close()
 
-    save_submission(record, session_id)
+    save_submission(record, set_id)
 
     return record
 
@@ -429,11 +506,11 @@ async def extract_submission_details(submission_id: str) -> SubmissionRecord:
 
     # ── 4. Save updated record in SQLite database ─────────────────────────────
     conn = get_db_connection()
-    row = conn.execute("SELECT session_id FROM submissions WHERE submission_id = ?", (submission_id,)).fetchone()
-    session_id = row["session_id"] if row else "unknown"
+    row = conn.execute("SELECT set_id FROM submissions WHERE submission_id = ?", (submission_id,)).fetchone()
+    set_id = row["set_id"] if row else "unknown"
     conn.close()
 
-    save_submission(record, session_id)
+    save_submission(record, set_id)
 
     return record
 
@@ -508,11 +585,11 @@ async def validate_submission_data(submission_id: str) -> SubmissionRecord:
 
     # Save to SQLite database
     conn = get_db_connection()
-    row = conn.execute("SELECT session_id FROM submissions WHERE submission_id = ?", (submission_id,)).fetchone()
-    session_id = row["session_id"] if row else "unknown"
+    row = conn.execute("SELECT set_id FROM submissions WHERE submission_id = ?", (submission_id,)).fetchone()
+    set_id = row["set_id"] if row else "unknown"
     conn.close()
 
-    save_submission(record, session_id)
+    save_submission(record, set_id)
     return record
 
 

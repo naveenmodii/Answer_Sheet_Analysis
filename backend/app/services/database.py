@@ -283,3 +283,16 @@ def get_set_confirmed_count(set_id: str) -> int:
     count = cursor.fetchone()[0]
     conn.close()
     return count
+
+
+def delete_set(set_id: str):
+    """
+    Deletes the set record from SQLite database along with all its submissions.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM submissions WHERE set_id = ?", (set_id,))
+    cursor.execute("DELETE FROM sets WHERE set_id = ?", (set_id,))
+    conn.commit()
+    conn.close()
+
