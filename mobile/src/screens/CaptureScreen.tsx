@@ -128,9 +128,9 @@ export default function CaptureScreen({ navigation }: Props) {
       const photo_w = GUIDE_W / scale;
       const photo_h = GUIDE_H / scale;
 
-      // Apply a 15% padding margin (consistent with backend preprocessor margins)
-      const margin_x = photo_w * 0.15;
-      const margin_y = photo_h * 0.15;
+      // Apply a minimal 5% padding margin (just enough to prevent clipping if slightly misaligned)
+      const margin_x = photo_w * 0.05;
+      const margin_y = photo_h * 0.05;
 
       // Calculate pixel integer coordinates and clamp them strictly to ensure
       // they never exceed actual bounds (preventing renderAsync crashes)
