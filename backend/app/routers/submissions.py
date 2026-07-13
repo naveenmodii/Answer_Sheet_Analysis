@@ -497,6 +497,10 @@ async def update_extraction_result(submission_id: str, data: ExtractionResult) -
 # Phase 7 Session Management & Export Compilation
 # ---------------------------------------------------------------------------
 
+@router.get(
+    "/sessions/{session_id}/compile",
+    summary="Compile consolidated session Excel spreadsheet",
+)
 @router.post(
     "/sessions/{session_id}/compile",
     summary="Compile consolidated session Excel spreadsheet",
