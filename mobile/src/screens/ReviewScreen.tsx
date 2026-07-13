@@ -79,7 +79,7 @@ interface SubmissionRecord {
 }
 
 export default function ReviewScreen({ route, navigation }: Props) {
-  const { imageUri, roi } = route.params;
+  const { imageUri } = route.params;
 
   const [flowState, setFlowState] = useState<FlowState>('idle');
   const [submissionId, setSubmissionId] = useState<string | null>(null);
@@ -119,14 +119,6 @@ export default function ReviewScreen({ route, navigation }: Props) {
         name: filename,
         type: mimeType,
       } as unknown as Blob);
-
-      // Append normalized visual guide ROI coordinates
-      if (roi) {
-        formData.append('roi_x', String(roi.x));
-        formData.append('roi_y', String(roi.y));
-        formData.append('roi_w', String(roi.w));
-        formData.append('roi_h', String(roi.h));
-      }
 
       const uploadResponse = await axios.post<{ submission_id: string; status: string }>(
         `${API_BASE_URL}/submissions`,
@@ -177,7 +169,7 @@ export default function ReviewScreen({ route, navigation }: Props) {
       setErrorMessage(detail);
       setFlowState('error');
     }
-  }, [imageUri, roi]);
+  }, [imageUri]);
 
   // ── Claude Vision Extraction Handler (Phase 3) ─────────────────────────────
   const handleExtractDetails = useCallback(async () => {

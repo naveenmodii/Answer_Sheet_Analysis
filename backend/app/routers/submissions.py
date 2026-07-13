@@ -186,12 +186,14 @@ async def preprocess_submission(submission_id: str) -> SubmissionRecord:
     # Import locally to avoid startup dependencies
     from app.services.preprocessing import preprocess_image
 
-    # Build ROI tuple if coordinates exist
+    # Build ROI tuple if coordinates exist (Phases 1-2 backwards compatibility)
     roi = None
     if all(v is not None for v in (record.roi_x, record.roi_y, record.roi_w, record.roi_h)):
         roi = (record.roi_x, record.roi_y, record.roi_w, record.roi_h)
 
-    status_result, debug_reason = preprocess_image(input_path, str(processed_path), roi)
+    # In Phase 3 (revisions), the mobile app uploads an image pre-cropped to the ROI.
+    # Therefore, we pass roi=None to run contour detection directly on the cropped bounds.
+    status_result, debug_reason = preprocess_image(input_path, str(processed_path), None)
 
     # ── 4. Update memory store record ────────────────────────────────────────
     record.preprocessing_status = status_result

@@ -11,7 +11,6 @@ export type RootStackParamList = {
   /** Phase 1: Review receives the local temp URI of the captured photo. */
   Review: {
     imageUri: string;
-    roi?: { x: number; y: number; w: number; h: number };
   };
 };
 

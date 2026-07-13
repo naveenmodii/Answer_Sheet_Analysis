@@ -25,6 +25,8 @@ import {
   useCameraPermission,
   usePhotoOutput,
 } from 'react-native-vision-camera';
+import * as Haptics from 'expo-haptics';
+import * as ImageManipulator from 'expo-image-manipulator';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/AppNavigator';
 
@@ -62,11 +64,19 @@ export default function CaptureScreen({ navigation }: Props) {
     try {
       setCapturing(true);
 
+      // Trigger tactile haptic confirmation immediately on press
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
+
       // v5: capturePhoto() is on photoOutput, not on the camera ref
+      // Set enableShutterSound: false to disable default camera shutter noise
       const photo = await photoOutput.capturePhoto(
-        { flashMode: 'off' },
+        { flashMode: 'off', enableShutterSound: false },
         {}, // required second arg in VisionCamera v5
       );
+
+      // Width and height of the captured photo in pixels
+      const photoWidth = photo.width;
+      const photoHeight = photo.height;
 
       // v5: Photo is in-memory — no .path property.
       // Must call saveToTemporaryFileAsync() to write to disk first.
@@ -74,18 +84,46 @@ export default function CaptureScreen({ navigation }: Props) {
       const filePath = await photo.saveToTemporaryFileAsync();
       photo.dispose(); // free native memory; temp file stays on disk
 
-      // Add file:// prefix so RN Image and FormData can read it
-      const imageUri = `file://${filePath}`;
-
+      // ── On-Device Cropping ─────────────────────────────────────────────────
       // Calculate normalized Region of Interest (ROI) from camera visual guide coordinates
-      const roi = {
-        x: (SCREEN_W - GUIDE_W) / 2 / SCREEN_W,
-        y: (SCREEN_H - GUIDE_H) / 2 / SCREEN_H,
-        w: GUIDE_W / SCREEN_W,
-        h: GUIDE_H / SCREEN_H,
-      };
+      const roi_x = (SCREEN_W - GUIDE_W) / 2 / SCREEN_W;
+      const roi_y = (SCREEN_H - GUIDE_H) / 2 / SCREEN_H;
+      const roi_w = GUIDE_W / SCREEN_W;
+      const roi_h = GUIDE_H / SCREEN_H;
 
-      navigation.navigate('Review', { imageUri, roi });
+      // Map normalized coordinates to pixel coordinates on the captured image
+      const px = roi_x * photoWidth;
+      const py = roi_y * photoHeight;
+      const pw = roi_w * photoWidth;
+      const ph = roi_h * photoHeight;
+
+      // Apply a 15% padding margin (consistent with backend preprocessor margins)
+      const margin_x = pw * 0.15;
+      const margin_y = ph * 0.15;
+
+      const originX = Math.max(0, Math.floor(px - margin_x));
+      const originY = Math.max(0, Math.floor(py - margin_y));
+      const width = Math.min(photoWidth - originX, Math.floor(pw + 2 * margin_x));
+      const height = Math.min(photoHeight - originY, Math.floor(ph + 2 * margin_y));
+
+      // Crop the image to guide box + margin bounds
+      const cropResult = await ImageManipulator.manipulateAsync(
+        filePath,
+        [
+          {
+            crop: {
+              originX,
+              originY,
+              width,
+              height,
+            },
+          },
+        ],
+        { compress: 0.9, format: ImageManipulator.SaveFormat.JPEG }
+      );
+
+      // Navigate to Review with the pre-cropped local file URI
+      navigation.navigate('Review', { imageUri: cropResult.uri });
     } catch (err) {
       console.error('Capture failed:', err);
     } finally {
