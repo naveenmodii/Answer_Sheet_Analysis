@@ -1,10 +1,19 @@
 {
   "expo": {
-    "name": "mobile",
-    "slug": "mobile",
+    "name": "Answer Sheet Analysis",
+    "slug": "answer-sheet-analysis",
+    "owner": "naveenmodii",
     "version": "1.0.0",
+    "android": {
+      "package": "com.naveenmodii.answersheetanalysis"
+    },
     "plugins": [
       "expo-sharing"
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "9a549e79-f4dc-43cb-8a4f-e11e6c4a18bd"
+      }
+    }
   }
 }
