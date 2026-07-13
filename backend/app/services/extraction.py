@@ -18,7 +18,7 @@ from anthropic import APIStatusError, APITimeoutError, APIConnectionError
 
 from app.models.schemas import ExtractionResult
 
-logger = logging.getLogger("sipar.extraction")
+logger = logging.getLogger("asa.extraction")
 
 
 # ─── System & User Prompt templates ──────────────────────────────────────────

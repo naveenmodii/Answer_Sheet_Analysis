@@ -1,5 +1,5 @@
 """
-SIPAR Backend — FastAPI application entry point.
+ASA Backend — FastAPI application entry point.
 """
 import os
 from contextlib import asynccontextmanager
@@ -31,8 +31,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="SIPAR API",
-    description="Smart Integrated Photo-to-Answer-Records — backend API.",
+    title="ASA API",
+    description="Answer Sheet Analysis — backend API.",
     version="0.1.0",
     lifespan=lifespan,
 )

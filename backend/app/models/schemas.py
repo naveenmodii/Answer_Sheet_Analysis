@@ -1,5 +1,5 @@
 """
-Pydantic schemas for SIPAR.
+Pydantic schemas for ASA.
 
 Phase 0: stubs only.
 Phase 1: added SubmissionRecord + SubmissionResponse for the upload endpoint.

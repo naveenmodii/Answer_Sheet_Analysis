@@ -23,7 +23,7 @@ import cv2
 import numpy as np
 from PIL import Image, ImageOps
 
-logger = logging.getLogger("sipar.preprocessing")
+logger = logging.getLogger("asa.preprocessing")
 
 
 # ─── Perspective Warp Helpers ────────────────────────────────────────────────

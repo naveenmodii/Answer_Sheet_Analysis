@@ -24,7 +24,7 @@ import {
   Alert,
 } from 'react-native';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
-import { Feather } from '@expo/vector-icons';
+import Feather from '@expo/vector-icons/Feather';
 import axios, { AxiosError } from 'axios';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/AppNavigator';
@@ -160,14 +160,13 @@ export default function ReviewScreen({ route, navigation }: Props) {
     try {
       const formData = new FormData();
       const filename = imageUri.split('/').pop() || 'booklet.jpg';
-      formData.append('file', {
+      formData.append('image', {
         uri: imageUri,
         name: filename,
         type: 'image/jpeg',
       } as any);
-      if (sessionId) {
-        formData.append('session_id', sessionId);
-      }
+      // session_id is required by the backend (Form(...)) — always append it
+      formData.append('session_id', sessionId);
 
       const uploadResponse = await axios.post<{ submission_id: string; status: string }>(
         `${API_BASE_URL}/submissions`,
@@ -193,11 +192,14 @@ export default function ReviewScreen({ route, navigation }: Props) {
       setDisplayUri(`${API_BASE_URL}/submissions/${subId}/preprocessed?t=${Date.now()}`);
       setFlowState('preprocessed');
     } catch (err) {
-      const axiosErr = err as AxiosError<{ detail: string }>;
+      const axiosErr = err as AxiosError<{ detail: unknown }>;
+      const rawDetail = axiosErr.response?.data?.detail;
       const detail =
-        axiosErr.response?.data?.detail ??
-        axiosErr.message ??
-        'Extraction request failed. Check server status.';
+        typeof rawDetail === 'string'
+          ? rawDetail
+          : Array.isArray(rawDetail)
+          ? rawDetail.map((e: any) => e?.msg ?? JSON.stringify(e)).join('; ')
+          : axiosErr.message ?? 'Upload failed. Check server status.';
       setErrorMessage(detail);
       setFlowState('error');
     }
@@ -248,11 +250,14 @@ export default function ReviewScreen({ route, navigation }: Props) {
         setFlowState('error');
       }
     } catch (err) {
-      const axiosErr = err as AxiosError<{ detail: string }>;
+      const axiosErr = err as AxiosError<{ detail: unknown }>;
+      const rawDetail = axiosErr.response?.data?.detail;
       const detail =
-        axiosErr.response?.data?.detail ??
-        axiosErr.message ??
-        'Extraction request failed. Check server status.';
+        typeof rawDetail === 'string'
+          ? rawDetail
+          : Array.isArray(rawDetail)
+          ? rawDetail.map((e: any) => e?.msg ?? JSON.stringify(e)).join('; ')
+          : axiosErr.message ?? 'Extraction failed. Check server status.';
       setErrorMessage(detail);
       setFlowState('error');
     }

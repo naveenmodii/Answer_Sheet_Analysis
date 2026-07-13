@@ -1,4 +1,3 @@
-/**
  * CaptureScreen — Phase 1
  *
  * Shows a full-screen live camera preview via react-native-vision-camera v5.
@@ -22,7 +21,7 @@ import {
   Modal,
   TextInput,
 } from 'react-native';
-import { Feather } from '@expo/vector-icons';
+import Feather from '@expo/vector-icons/Feather';
 import { useFocusEffect } from '@react-navigation/native';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
@@ -178,7 +177,7 @@ export default function CaptureScreen({ route, navigation }: Props) {
       const previewWidth = SCREEN_W;
       const previewHeight = SCREEN_H;
 
-      console.log(`[SIPAR FOV Debug] Screen: ${previewWidth}x${previewHeight}, Sensor: ${photoWidth}x${photoHeight}`);
+      console.log(`[ASA FOV Debug] Screen: ${previewWidth}x${previewHeight}, Sensor: ${photoWidth}x${photoHeight}`);
 
       const scale = Math.max(previewWidth / actualWidth, previewHeight / actualHeight);
       const renderedWidth = actualWidth * scale;
@@ -223,7 +222,7 @@ export default function CaptureScreen({ route, navigation }: Props) {
         <Feather name="camera-off" size={48} color={MUTED} style={{ marginBottom: 20 }} />
         <Text style={styles.permissionTitle}>Camera Access Required</Text>
         <Text style={styles.permissionBody}>
-          SIPAR needs camera access to photograph answer booklet covers.
+          This app needs camera access to photograph answer booklet covers.
           Please grant permission in Settings.
         </Text>
         <Pressable

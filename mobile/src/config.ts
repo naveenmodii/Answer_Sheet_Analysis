@@ -1,5 +1,5 @@
 /**
- * SIPAR — Backend API configuration
+ * ASA — Backend API configuration
  *
  * ── How to switch environments ─────────────────────────────────────────────
  *
@@ -23,6 +23,6 @@ const ENV: 'development' | 'production' = 'development';
 const DEV_API_URL = 'http://172.19.12.201:8000';
 
 /** Paste your Render Web Service URL here after deploying (see DEPLOYMENT.md). */
-const PROD_API_URL = 'https://sipar-backend.onrender.com'; // ← replace with actual URL
+const PROD_API_URL = 'https://asa-backend.onrender.com'; // ← replace with actual URL
 
 export const API_BASE_URL = ENV === 'production' ? PROD_API_URL : DEV_API_URL;

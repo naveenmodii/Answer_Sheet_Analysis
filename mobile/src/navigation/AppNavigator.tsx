@@ -34,7 +34,7 @@ export default function AppNavigator() {
         <Stack.Screen
           name="Dashboard"
           component={DashboardScreen}
-          options={{ title: 'SIPAR Dashboard', headerShown: false }}
+          options={{ title: 'Answer Sheet Analysis', headerShown: false }}
         />
         <Stack.Screen
           name="Capture"

@@ -10,7 +10,7 @@ import {
   TextInput,
   Modal,
 } from 'react-native';
-import { Feather } from '@expo/vector-icons';
+import Feather from '@expo/vector-icons/Feather';
 import { useFocusEffect } from '@react-navigation/native';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
@@ -178,8 +178,8 @@ export default function DashboardScreen({ navigation }: Props) {
     <View style={styles.root}>
       {/* Header */}
       <View style={styles.header}>
-        <Text style={styles.appTitle}>SIPAR</Text>
-        <Text style={styles.appSub}>Smart Photo-to-Answer-Records</Text>
+        <Text style={styles.appTitle}>Answer Sheet Analysis</Text>
+        <Text style={styles.appSub}>Scan · Extract · Verify</Text>
       </View>
 
       {/* Sessions List */}
