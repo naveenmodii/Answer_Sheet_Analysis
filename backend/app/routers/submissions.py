@@ -20,6 +20,9 @@ from pathlib import Path
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 
 from app.models.schemas import SubmissionRecord, SubmissionResponse, ExtractionResult, ValidationResult
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/submissions", tags=["Submissions"])
 
