@@ -128,7 +128,6 @@ def extract_details_from_booklet(
         response = client.messages.create(
             model="claude-sonnet-5",
             max_tokens=1500,
-            temperature=0.0,  # Minimize variability for data extraction
             system=SYSTEM_PROMPT,
             messages=[
                 {
