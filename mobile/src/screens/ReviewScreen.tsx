@@ -64,6 +64,26 @@ interface ExtractionResult {
   field_confidence: FieldConfidence;
 }
 
+interface QuestionValidation {
+  question_no: number;
+  computed_sum: number;
+  declared_total: number;
+  match: boolean;
+}
+
+interface GrandTotalValidation {
+  computed_sum: number;
+  declared_total: number;
+  match: boolean;
+}
+
+interface ValidationResult {
+  overall_status: 'valid' | 'mismatch' | 'incomplete';
+  question_level: QuestionValidation[];
+  grand_total: GrandTotalValidation;
+  issues: string[];
+}
+
 interface SubmissionRecord {
   submission_id: string;
   original_filename: string;
@@ -76,6 +96,8 @@ interface SubmissionRecord {
   extraction_status: 'pending' | 'success' | 'failed';
   extraction_result?: ExtractionResult;
   extraction_error?: string;
+  validation_status: 'pending' | 'success' | 'failed';
+  validation_result?: ValidationResult;
 }
 
 export default function ReviewScreen({ route, navigation }: Props) {
@@ -92,6 +114,9 @@ export default function ReviewScreen({ route, navigation }: Props) {
   // Status of the Claude OCR extraction step
   const [extractionResult, setExtractionResult] = useState<ExtractionResult | null>(null);
 
+  // Status of the arithmetic validation check
+  const [validationResult, setValidationResult] = useState<ValidationResult | null>(null);
+
   // Holds either the local captured image URI or the remote preprocessed URL
   const [displayUri, setDisplayUri] = useState<string>(imageUri);
 
@@ -102,6 +127,7 @@ export default function ReviewScreen({ route, navigation }: Props) {
     setPrepStatus('pending');
     setPrepDebugReason(null);
     setExtractionResult(null);
+    setValidationResult(null);
     setDisplayUri(imageUri);
 
     let subId = '';
@@ -131,20 +157,9 @@ export default function ReviewScreen({ route, navigation }: Props) {
 
       subId = uploadResponse.data.submission_id;
       setSubmissionId(subId);
-    } catch (err) {
-      const axiosErr = err as AxiosError<{ detail: string }>;
-      const detail =
-        axiosErr.response?.data?.detail ??
-        axiosErr.message ??
-        'Upload failed. Check your connection.';
-      setErrorMessage(detail);
-      setFlowState('error');
-      return;
-    }
+      setFlowState('preprocessing');
 
-    // ── Step 2: Trigger Preprocessing on the server ──────────────────────────
-    setFlowState('preprocessing');
-    try {
+      // ── Step 2: Trigger Preprocess ──────────────────────────────────────────
       const prepResponse = await axios.post<SubmissionRecord>(
         `${API_BASE_URL}/submissions/${subId}/preprocess`,
         {},
@@ -187,6 +202,21 @@ export default function ReviewScreen({ route, navigation }: Props) {
 
       if (extractResponse.data.extraction_status === 'success' && extractResponse.data.extraction_result) {
         setExtractionResult(extractResponse.data.extraction_result);
+
+        // ── Phase 4: Automatic Local Arithmetic Validation ───────────────────
+        try {
+          const valResponse = await axios.post<SubmissionRecord>(
+            `${API_BASE_URL}/submissions/${submissionId}/validate`,
+            {},
+            { timeout: 15_000 }
+          );
+          if (valResponse.data.validation_status === 'success' && valResponse.data.validation_result) {
+            setValidationResult(valResponse.data.validation_result);
+          }
+        } catch (valErr) {
+          console.warn('Automatic validation request failed:', valErr);
+        }
+
         setFlowState('extracted');
       } else {
         const errorMsg = extractResponse.data.extraction_error ?? 'Claude failed to extract details.';
@@ -205,6 +235,7 @@ export default function ReviewScreen({ route, navigation }: Props) {
   }, [submissionId]);
 
   const handleRetake = useCallback(() => {
+    setValidationResult(null);
     navigation.goBack();
   }, [navigation]);
 
@@ -267,6 +298,54 @@ export default function ReviewScreen({ route, navigation }: Props) {
               <Text style={styles.successIcon}>✨</Text>
               <Text style={styles.extractedHeaderTitle}>Extracted Details</Text>
             </View>
+
+            {/* ── Phase 4: Validation Summary Banner ─────────────────────────── */}
+            {validationResult && (
+              <View style={styles.validationNoticeContainer}>
+                {validationResult.overall_status === 'valid' && (
+                  <View style={[styles.validationBanner, styles.validBanner]}>
+                    <Text style={styles.validationBannerIcon}>✅</Text>
+                    <View style={styles.validationBannerTextContainer}>
+                      <Text style={styles.validTitle}>Arithmetic Validated</Text>
+                      <Text style={styles.validSub}>
+                        All question subparts and grand totals match perfectly.
+                      </Text>
+                    </View>
+                  </View>
+                )}
+
+                {validationResult.overall_status === 'mismatch' && (
+                  <View style={[styles.validationBanner, styles.mismatchBanner]}>
+                    <Text style={styles.validationBannerIcon}>❌</Text>
+                    <View style={styles.validationBannerTextContainer}>
+                      <Text style={styles.mismatchTitle}>Arithmetic Discrepancies</Text>
+                      {validationResult.issues.map((issue, idx) => (
+                        <Text key={idx} style={styles.issueText}>
+                          • {issue}
+                        </Text>
+                      ))}
+                    </View>
+                  </View>
+                )}
+
+                {validationResult.overall_status === 'incomplete' && (
+                  <View style={[styles.validationBanner, styles.incompleteBanner]}>
+                    <Text style={styles.validationBannerIcon}>⚠️</Text>
+                    <View style={styles.validationBannerTextContainer}>
+                      <Text style={styles.incompleteTitle}>Incomplete Marks Data</Text>
+                      <Text style={styles.incompleteSub}>
+                        Possible extraction gap. Questions present in one list are missing in the other:
+                      </Text>
+                      {validationResult.issues.map((issue, idx) => (
+                        <Text key={idx} style={styles.issueText}>
+                          • {issue}
+                        </Text>
+                      ))}
+                    </View>
+                  </View>
+                )}
+              </View>
+            )}
 
             {/* Metadata Fields */}
             <View style={styles.card}>
@@ -335,21 +414,58 @@ export default function ReviewScreen({ route, navigation }: Props) {
               {extractionResult.question_totals.length === 0 ? (
                 <Text style={styles.emptyText}>No question totals detected.</Text>
               ) : (
-                extractionResult.question_totals.map((tot) => (
-                  <View key={tot.question_no} style={styles.totalRow}>
-                    <Text style={styles.totalLabel}>Question {tot.question_no}:</Text>
-                    <Text style={styles.totalValue}>{tot.total} Marks</Text>
-                  </View>
-                ))
+                extractionResult.question_totals.map((tot) => {
+                  const qVal = validationResult?.question_level.find(
+                    (q) => q.question_no === tot.question_no
+                  );
+
+                  return (
+                    <View
+                      key={tot.question_no}
+                      style={[
+                        styles.totalRow,
+                        qVal && !qVal.match && styles.warningRowHighlight,
+                      ]}
+                    >
+                      <Text style={styles.totalLabel}>Question {tot.question_no}:</Text>
+                      <View style={styles.row}>
+                        <Text style={styles.totalValue}>{tot.total} Marks</Text>
+                        {qVal && (
+                          qVal.match ? (
+                            <Text style={styles.matchPassTag}>  ✅</Text>
+                          ) : (
+                            <Text style={styles.matchFailTag}>  ⚠️ (Sum: {qVal.computed_sum})</Text>
+                          )
+                        )}
+                      </View>
+                    </View>
+                  );
+                })
               )}
 
-              <View style={[styles.totalRow, styles.grandTotalRow]}>
+              {/* Grand Total validation line */}
+              <View
+                style={[
+                  styles.totalRow,
+                  styles.grandTotalRow,
+                  validationResult && !validationResult.grand_total.match && styles.warningRowHighlight,
+                ]}
+              >
                 <Text style={styles.grandTotalLabel}>Declared Grand Total:</Text>
-                <Text style={styles.grandTotalValue}>
-                  {extractionResult.total_marks_declared !== null
-                    ? `${extractionResult.total_marks_declared} Marks`
-                    : 'Not detected'}
-                </Text>
+                <View style={styles.row}>
+                  <Text style={styles.grandTotalValue}>
+                    {extractionResult.total_marks_declared !== null
+                      ? `${extractionResult.total_marks_declared} Marks`
+                      : 'Not detected'}
+                  </Text>
+                  {validationResult && (
+                    validationResult.grand_total.match ? (
+                      <Text style={styles.matchPassTag}>  ✅</Text>
+                    ) : (
+                      <Text style={styles.matchFailTag}>  ⚠️ (Sum: {validationResult.grand_total.computed_sum})</Text>
+                    )
+                  )}
+                </View>
               </View>
             </View>
           </View>
@@ -751,5 +867,88 @@ const styles = StyleSheet.create({
 
   extractButton: {
     backgroundColor: '#ec4899',
+  },
+
+  // ── Phase 4 Validation UI Styles ──────────────────────────────────────────
+  validationNoticeContainer: {
+    marginBottom: 16,
+    borderRadius: 14,
+    overflow: 'hidden',
+  },
+  validationBanner: {
+    flexDirection: 'row',
+    padding: 16,
+    borderRadius: 14,
+    borderWidth: 1.5,
+    gap: 12,
+  },
+  validationBannerIcon: {
+    fontSize: 22,
+  },
+  validationBannerTextContainer: {
+    flex: 1,
+    gap: 4,
+  },
+  validBanner: {
+    backgroundColor: 'rgba(34, 197, 94, 0.08)',
+    borderColor: '#22c55e',
+  },
+  validTitle: {
+    color: '#4ade80',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  validSub: {
+    color: '#a7f3d0',
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  mismatchBanner: {
+    backgroundColor: 'rgba(239, 68, 68, 0.08)',
+    borderColor: '#ef4444',
+  },
+  mismatchTitle: {
+    color: '#f87171',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  incompleteBanner: {
+    backgroundColor: 'rgba(59, 130, 246, 0.08)',
+    borderColor: '#3b82f6',
+  },
+  incompleteTitle: {
+    color: '#60a5fa',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  incompleteSub: {
+    color: '#93c5fd',
+    fontSize: 13,
+    lineHeight: 18,
+    marginBottom: 4,
+  },
+  issueText: {
+    color: '#cbd5e1',
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  warningRowHighlight: {
+    backgroundColor: 'rgba(239, 68, 68, 0.12)',
+    borderWidth: 1,
+    borderColor: '#ef4444',
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    marginVertical: 2,
+  },
+  matchPassTag: {
+    color: '#22c55e',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  matchFailTag: {
+    color: '#f87171',
+    fontSize: 12,
+    fontWeight: '700',
   },
 });
