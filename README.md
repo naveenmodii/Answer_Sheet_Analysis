@@ -1,6 +1,6 @@
-# Answer Sheet Analysis — Smart Integrated Photo-to-Answer-Records
+# Mulyank — Answer Sheet Evaluation
 
-Answer Sheet Analysis is a mobile app that lets teachers photograph the cover page of an exam answer booklet and automatically extract student details and per-question marks via a vision-LLM, validate the arithmetic, and append the verified record as a row in an Excel file — turning a manual data-entry chore into a one-tap review-and-save workflow.
+Mulyank is a mobile app that lets teachers photograph the cover page of an exam answer booklet and automatically extract student details and per-question marks via a vision-LLM, validate the arithmetic, and append the verified record as a row in an Excel file — turning a manual data-entry chore into a one-tap review-and-save workflow.
 
 ---
 

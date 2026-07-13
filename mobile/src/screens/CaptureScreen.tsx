@@ -41,10 +41,10 @@ const CORNER_SIZE = 20;
 const CORNER_THICKNESS = 3;
 
 // ── Design tokens ─────────────────────────────────────────────────────────────
-const ACCENT       = '#5f5af6';
-const ACCENT_LIGHT = '#a5a0ff';
-const MUTED        = '#4a4a5a';
-const TEXT_BODY    = '#d0d0e0';
+const ACCENT       = '#7A2422';   // Mulyank primary maroon
+const ACCENT_LIGHT = '#FFC96E';   // warm gold
+const MUTED        = '#9A7B6E';
+const TEXT_BODY    = '#FDF6EA';   // warm ivory
 
 export default function CaptureScreen({ route, navigation }: Props) {
   const { setId } = route.params;
@@ -315,14 +315,14 @@ const styles = StyleSheet.create({
     width: GUIDE_W,
     height: GUIDE_H,
     borderWidth: 1.5,
-    borderColor: 'rgba(200,200,255,0.6)',
+    borderColor: 'rgba(255,200,150,0.45)',
     position: 'relative',
   },
   corner: {
     position: 'absolute',
     width: CORNER_SIZE,
     height: CORNER_SIZE,
-    borderColor: '#a5b4fc',
+    borderColor: '#FFC96E',
   },
   cornerTL: { top: -CORNER_THICKNESS / 2, left: -CORNER_THICKNESS / 2, borderTopWidth: CORNER_THICKNESS, borderLeftWidth: CORNER_THICKNESS },
   cornerTR: { top: -CORNER_THICKNESS / 2, right: -CORNER_THICKNESS / 2, borderTopWidth: CORNER_THICKNESS, borderRightWidth: CORNER_THICKNESS },
@@ -330,7 +330,7 @@ const styles = StyleSheet.create({
   cornerBR: { bottom: -CORNER_THICKNESS / 2, right: -CORNER_THICKNESS / 2, borderBottomWidth: CORNER_THICKNESS, borderRightWidth: CORNER_THICKNESS },
 
   hintContainer: { position: 'absolute', top: OVERLAY_VERT - 36, left: 0, right: 0, alignItems: 'center' },
-  hintText: { color: 'rgba(200,200,255,0.85)', fontSize: 13, letterSpacing: 0.3 },
+  hintText: { color: 'rgba(255,220,170,0.85)', fontSize: 13, letterSpacing: 0.3 },
 
   shutterContainer: { position: 'absolute', bottom: 48, left: 0, right: 0, alignItems: 'center' },
   shutterOuter: {
@@ -343,7 +343,7 @@ const styles = StyleSheet.create({
     borderWidth: 4,
     borderColor: 'rgba(255,255,255,0.4)',
   },
-  shutterOuterPressed: { transform: [{ scale: 0.94 }], backgroundColor: 'rgba(200,200,255,0.9)' },
+  shutterOuterPressed: { transform: [{ scale: 0.94 }], backgroundColor: 'rgba(255,200,110,0.9)' },
   shutterInner: { width: 52, height: 52, borderRadius: 26, backgroundColor: '#fff' },
 
   topHeader: {

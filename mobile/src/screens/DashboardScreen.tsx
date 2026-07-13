@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
+  Image,
+  ImageBackground,
   ScrollView,
   StyleSheet,
   Text,
@@ -41,7 +43,7 @@ export default function DashboardScreen({ navigation }: Props) {
   const [sets, setSets] = useState<SetMetadata[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // States for cross-platform set creation modal
+  // States for set creation modal
   const [createModalVisible, setCreateModalVisible] = useState(false);
   const [newSetName, setNewSetName] = useState('');
 
@@ -92,7 +94,7 @@ export default function DashboardScreen({ navigation }: Props) {
       });
 
       const newSet = res.data;
-      
+
       try {
         await FileSystem.writeAsStringAsync(
           currentSetFileUri,
@@ -155,11 +157,7 @@ export default function DashboardScreen({ navigation }: Props) {
             try {
               setLoading(true);
               await axios.delete(`${API_BASE_URL}/submissions/sets/${set.set_id}`);
-              
-              // Immediately remove from lists without requiring full refresh
               setSets((prev) => prev.filter((s) => s.set_id !== set.set_id));
-              
-              // Clear current local set persistence if deleted
               try {
                 const stored = await FileSystem.readAsStringAsync(currentSetFileUri);
                 const { setId } = JSON.parse(stored);
@@ -167,9 +165,8 @@ export default function DashboardScreen({ navigation }: Props) {
                   await FileSystem.deleteAsync(currentSetFileUri, { idempotent: true });
                 }
               } catch (clearErr) {
-                // Ignore if file doesn't exist
+                // Ignore
               }
-
               Alert.alert('Deleted', `Set '${set.name}' has been deleted.`);
             } catch (err) {
               console.error('Failed to delete set:', err);
@@ -192,24 +189,18 @@ export default function DashboardScreen({ navigation }: Props) {
         Alert.alert('Sharing Unavailable', 'Native sharing is not supported on this device.');
         return;
       }
-
       setLoading(true);
       localUri = `${FileSystem.documentDirectory}set_${set.set_id}.xlsx`;
-
       const downloadResult = await FileSystem.downloadAsync(
         `${API_BASE_URL}/submissions/sets/${set.set_id}/download`,
         localUri
       );
-
       if (downloadResult.status !== 200) {
         throw new Error('Server download returned status ' + downloadResult.status);
       }
-
       const sanitizedName = set.name.replace(/[\/\\?%*:|"<>\s]+/g, '_');
       tempUri = `${FileSystem.cacheDirectory}${sanitizedName}.xlsx`;
-
       await FileSystem.copyAsync({ from: downloadResult.uri, to: tempUri });
-
       await Sharing.shareAsync(tempUri, {
         mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         dialogTitle: `Share spreadsheet for ${set.name}`,
@@ -221,18 +212,10 @@ export default function DashboardScreen({ navigation }: Props) {
     } finally {
       setLoading(false);
       if (tempUri) {
-        try {
-          await FileSystem.deleteAsync(tempUri, { idempotent: true });
-        } catch (cleanupErr) {
-          console.warn(cleanupErr);
-        }
+        try { await FileSystem.deleteAsync(tempUri, { idempotent: true }); } catch {}
       }
       if (localUri) {
-        try {
-          await FileSystem.deleteAsync(localUri, { idempotent: true });
-        } catch (cleanupErr) {
-          console.warn(cleanupErr);
-        }
+        try { await FileSystem.deleteAsync(localUri, { idempotent: true }); } catch {}
       }
     }
   };
@@ -250,19 +233,26 @@ export default function DashboardScreen({ navigation }: Props) {
 
   return (
     <View style={styles.root}>
-      {/* Header */}
-      <View style={styles.header}>
-        <Text style={styles.appTitle}>Answer Sheet Analysis</Text>
-        <Text style={styles.appSub}>Scan · Extract · Verify</Text>
-      </View>
+      {/* ── Header with pattern tile background ── */}
+      <ImageBackground
+        source={require('../../assets/dashboard-pattern-tile.png')}
+        style={styles.header}
+        imageStyle={styles.headerPattern}
+        resizeMode="repeat"
+      >
+        <View style={styles.headerContent}>
+          <Text style={styles.appTitle}>Mulyank</Text>
+          <Text style={styles.appSub}>Answer Sheet Evaluation</Text>
+        </View>
+      </ImageBackground>
 
-      {/* Sets List */}
+      {/* ── Sets list ── */}
       <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
         <Text style={styles.sectionLabel}>SCAN SETS</Text>
 
         {loading && sets.length === 0 ? (
           <View style={styles.centerWrap}>
-            <ActivityIndicator size="large" color={ACCENT} />
+            <ActivityIndicator size="large" color={CTA} />
           </View>
         ) : sets.length === 0 ? (
           <View style={styles.emptyCard}>
@@ -275,7 +265,7 @@ export default function DashboardScreen({ navigation }: Props) {
               style={({ pressed }) => [styles.primaryBtn, pressed && styles.btnPressed]}
               onPress={handleOpenCreateModal}
             >
-              <Feather name="plus" size={16} color="#fff" style={styles.btnIcon} />
+              <Feather name="plus" size={16} color={BG} style={styles.btnIcon} />
               <Text style={styles.primaryBtnText}>New Scan Set</Text>
             </Pressable>
           </View>
@@ -301,14 +291,14 @@ export default function DashboardScreen({ navigation }: Props) {
 
               <View style={styles.divider} />
 
-              {/* Actions row: download, view rows, delete */}
+              {/* Actions row */}
               <View style={styles.actionRow}>
                 <Pressable
                   style={({ pressed }) => [styles.actionBtn, styles.shareBtn, pressed && styles.btnPressed]}
                   onPress={() => handleShareSetSpreadsheet(item)}
                   accessibilityLabel={`Download spreadsheet for ${item.name}`}
                 >
-                  <Feather name="share-2" size={14} color="#fff" style={styles.btnIcon} />
+                  <Feather name="share-2" size={14} color={BG} style={styles.btnIcon} />
                   <Text style={styles.shareBtnText}>Download & Share</Text>
                 </Pressable>
 
@@ -317,7 +307,7 @@ export default function DashboardScreen({ navigation }: Props) {
                   onPress={() => handleViewRows(item)}
                   accessibilityLabel={`View confirmed rows for ${item.name}`}
                 >
-                  <Feather name="eye" size={16} color={TEXT} />
+                  <Feather name="eye" size={16} color={PRIMARY} />
                 </Pressable>
 
                 <Pressable
@@ -325,7 +315,7 @@ export default function DashboardScreen({ navigation }: Props) {
                   onPress={() => handleDeleteSet(item)}
                   accessibilityLabel={`Delete set ${item.name}`}
                 >
-                  <Feather name="trash-2" size={16} color="#f87171" />
+                  <Feather name="trash-2" size={16} color="#e05a5a" />
                 </Pressable>
               </View>
             </View>
@@ -337,16 +327,16 @@ export default function DashboardScreen({ navigation }: Props) {
             style={({ pressed }) => [styles.primaryBtn, styles.fabBtn, pressed && styles.btnPressed]}
             onPress={handleOpenCreateModal}
           >
-            <Feather name="plus" size={16} color="#fff" style={styles.btnIcon} />
+            <Feather name="plus" size={16} color={BG} style={styles.btnIcon} />
             <Text style={styles.primaryBtnText}>New Scan Set</Text>
           </Pressable>
         )}
       </ScrollView>
 
-      {/* Create Set Modal */}
+      {/* ── Create Set Modal ── */}
       <Modal
         visible={createModalVisible}
-        transparent={true}
+        transparent
         animationType="fade"
         onRequestClose={() => setCreateModalVisible(false)}
       >
@@ -382,10 +372,10 @@ export default function DashboardScreen({ navigation }: Props) {
         </View>
       </Modal>
 
-      {/* View Rows Modal */}
+      {/* ── View Rows Modal ── */}
       <Modal
         visible={viewRowsModalVisible}
-        transparent={true}
+        transparent
         animationType="fade"
         onRequestClose={() => setViewRowsModalVisible(false)}
       >
@@ -396,12 +386,12 @@ export default function DashboardScreen({ navigation }: Props) {
                 {viewRowsSetName}
               </Text>
               <Pressable onPress={() => setViewRowsModalVisible(false)}>
-                <Feather name="x" size={20} color={TEXT_MUTED} />
+                <Feather name="x" size={20} color={MUTED} />
               </Pressable>
             </View>
 
             {viewRowsLoading ? (
-              <ActivityIndicator size="large" color={ACCENT} style={{ marginVertical: 32 }} />
+              <ActivityIndicator size="large" color={CTA} style={{ marginVertical: 32 }} />
             ) : viewRowsList.length === 0 ? (
               <Text style={styles.noRowsText}>No confirmed booklet entries in this set yet.</Text>
             ) : (
@@ -449,39 +439,46 @@ export default function DashboardScreen({ navigation }: Props) {
   );
 }
 
-// ── Design tokens ─────────────────────────────────────────────────────────────
-const BG        = '#0b0b0e';
-const SURFACE   = '#111116';
-const BORDER    = '#1e1e26';
-const ACCENT    = '#5f5af6';
-const TEXT      = '#e8e8f0';
-const TEXT_MUTED = '#7a7a8c';
-const MUTED     = '#4a4a5a';
+// ── Mulyank design tokens ─────────────────────────────────────────────────────
+const PRIMARY   = '#7A2422';   // deep maroon
+const SECONDARY = '#E87A2C';   // marigold / terracotta
+const CTA       = '#FFC96E';   // warm gold
+const BG        = '#FDF6EA';   // warm ivory
+const TEXT_DARK = '#3A1F1A';   // warm dark brown
+const SURFACE   = '#FFFFFF';
+const BORDER    = '#E8D8C8';
+const MUTED     = '#9A7B6E';
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: BG },
 
+  // ── Header ──────────────────────────────────────────────────────────────────
   header: {
-    paddingTop: 60,
+    paddingTop: 56,
     paddingBottom: 20,
+  },
+  headerPattern: {
+    opacity: 0.45,
+  },
+  headerContent: {
     paddingHorizontal: 20,
-    borderBottomWidth: 1,
-    borderColor: BORDER,
+    backgroundColor: 'transparent',
   },
   appTitle: {
-    fontSize: 22,
-    fontWeight: '700',
-    color: TEXT,
-    letterSpacing: 1.5,
+    fontSize: 28,
+    fontWeight: '800',
+    color: PRIMARY,
+    letterSpacing: 0.5,
   },
   appSub: {
-    fontSize: 12,
-    color: TEXT_MUTED,
+    fontSize: 13,
+    color: SECONDARY,
     marginTop: 3,
     fontWeight: '500',
-    letterSpacing: 0.2,
+    letterSpacing: 0.3,
   },
 
+  // ── Scroll ──────────────────────────────────────────────────────────────────
   scroll: { flex: 1 },
   scrollContent: { padding: 20, paddingBottom: 56, gap: 12 },
 
@@ -495,6 +492,7 @@ const styles = StyleSheet.create({
 
   centerWrap: { paddingVertical: 64, alignItems: 'center' },
 
+  // ── Empty state ─────────────────────────────────────────────────────────────
   emptyCard: {
     backgroundColor: SURFACE,
     borderWidth: 1,
@@ -505,15 +503,16 @@ const styles = StyleSheet.create({
     gap: 12,
     marginTop: 8,
   },
-  emptyTitle: { fontSize: 17, fontWeight: '700', color: TEXT },
+  emptyTitle: { fontSize: 17, fontWeight: '700', color: TEXT_DARK },
   emptyBody: {
     fontSize: 13,
-    color: TEXT_MUTED,
+    color: MUTED,
     textAlign: 'center',
     lineHeight: 20,
     marginBottom: 8,
   },
 
+  // ── Set card ────────────────────────────────────────────────────────────────
   sessionCard: {
     backgroundColor: SURFACE,
     borderWidth: 1,
@@ -529,19 +528,20 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   metaCol: { flex: 1, gap: 4 },
-  sessionName: { fontSize: 15, fontWeight: '600', color: TEXT },
-  sessionDate: { fontSize: 12, color: TEXT_MUTED },
+  sessionName: { fontSize: 15, fontWeight: '600', color: TEXT_DARK },
+  sessionDate: { fontSize: 12, color: MUTED },
   badge: {
-    backgroundColor: `${ACCENT}18`,
+    backgroundColor: `${PRIMARY}12`,
     paddingHorizontal: 10,
     paddingVertical: 4,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: `${ACCENT}40`,
+    borderColor: `${PRIMARY}30`,
   },
-  badgeText: { color: ACCENT, fontSize: 12, fontWeight: '600' },
+  badgeText: { color: PRIMARY, fontSize: 12, fontWeight: '600' },
   divider: { height: 1, backgroundColor: BORDER },
 
+  // ── Actions ─────────────────────────────────────────────────────────────────
   actionRow: { flexDirection: 'row', gap: 8, alignItems: 'center' },
   actionBtn: {
     flexDirection: 'row',
@@ -551,13 +551,13 @@ const styles = StyleSheet.create({
     borderRadius: 9,
   },
   btnIcon: { marginRight: 5 },
-  shareBtn: { flex: 1, backgroundColor: ACCENT },
-  shareBtnText: { color: '#fff', fontSize: 13, fontWeight: '600' },
+  shareBtn: { flex: 1, backgroundColor: CTA },
+  shareBtnText: { color: TEXT_DARK, fontSize: 13, fontWeight: '700' },
 
   iconBtn: {
     width: 36,
     height: 36,
-    backgroundColor: '#1b1b24',
+    backgroundColor: `${PRIMARY}08`,
     borderWidth: 1,
     borderColor: BORDER,
     borderRadius: 9,
@@ -565,13 +565,14 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   deleteBtn: {
-    backgroundColor: 'rgba(224,90,90,0.08)',
-    borderColor: 'rgba(224,90,90,0.25)',
+    backgroundColor: 'rgba(224,90,90,0.06)',
+    borderColor: 'rgba(224,90,90,0.2)',
   },
 
+  // ── CTA Button ──────────────────────────────────────────────────────────────
   primaryBtn: {
     flexDirection: 'row',
-    backgroundColor: ACCENT,
+    backgroundColor: CTA,
     paddingVertical: 13,
     paddingHorizontal: 24,
     borderRadius: 12,
@@ -579,20 +580,21 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     minHeight: 48,
   },
-  primaryBtnText: { color: '#fff', fontSize: 15, fontWeight: '600' },
+  primaryBtnText: { color: TEXT_DARK, fontSize: 15, fontWeight: '700' },
   fabBtn: { marginTop: 8 },
   btnPressed: { opacity: 0.82, transform: [{ scale: 0.98 }] },
 
+  // ── Modals ──────────────────────────────────────────────────────────────────
   modalBg: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.6)',
+    backgroundColor: 'rgba(58,31,26,0.45)',
     justifyContent: 'center',
     alignItems: 'center',
     padding: 24,
   },
   modalContent: {
     width: '100%',
-    backgroundColor: '#18181f',
+    backgroundColor: BG,
     borderWidth: 1,
     borderColor: BORDER,
     borderRadius: 18,
@@ -604,16 +606,16 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
   },
-  modalTitle: { fontSize: 17, fontWeight: '700', color: TEXT, flex: 1, marginRight: 8 },
-  modalDesc: { fontSize: 13, color: TEXT_MUTED, textAlign: 'center', lineHeight: 18 },
+  modalTitle: { fontSize: 17, fontWeight: '700', color: TEXT_DARK, flex: 1, marginRight: 8 },
+  modalDesc: { fontSize: 13, color: MUTED, textAlign: 'center', lineHeight: 18 },
   modalInput: {
-    backgroundColor: '#0f0f14',
+    backgroundColor: SURFACE,
     borderWidth: 1,
     borderColor: BORDER,
     borderRadius: 10,
     paddingHorizontal: 12,
     paddingVertical: 11,
-    color: TEXT,
+    color: TEXT_DARK,
     fontSize: 14,
   },
   modalButtons: { flexDirection: 'row', gap: 10 },
@@ -625,23 +627,19 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   modalCancelBtn: { backgroundColor: 'transparent', borderWidth: 1, borderColor: BORDER },
-  modalCancelText: { color: TEXT_MUTED, fontWeight: '600' },
-  modalSaveBtn: { backgroundColor: ACCENT },
-  modalSaveText: { color: '#fff', fontWeight: '700' },
+  modalCancelText: { color: MUTED, fontWeight: '600' },
+  modalSaveBtn: { backgroundColor: PRIMARY },
+  modalSaveText: { color: BG, fontWeight: '700' },
 
+  // ── Rows modal table ────────────────────────────────────────────────────────
   noRowsText: {
-    color: TEXT_MUTED,
+    color: MUTED,
     fontSize: 13,
     textAlign: 'center',
     paddingVertical: 32,
   },
-  rowsScroll: {
-    width: '100%',
-    maxHeight: 300,
-  },
-  rowsContainer: {
-    gap: 8,
-  },
+  rowsScroll: { width: '100%', maxHeight: 300 },
+  rowsContainer: { gap: 8 },
   tableHeader: {
     flexDirection: 'row',
     borderBottomWidth: 1,
@@ -662,10 +660,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: 0.5,
     borderColor: BORDER,
   },
-  tableCell: {
-    fontSize: 13,
-    color: TEXT,
-  },
+  tableCell: { fontSize: 13, color: TEXT_DARK },
   valBadge: {
     fontSize: 10,
     fontWeight: '700',
@@ -675,11 +670,11 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   valValid: {
-    backgroundColor: 'rgba(52,199,89,0.12)',
-    color: '#34c759',
+    backgroundColor: 'rgba(22,163,74,0.1)',
+    color: '#16a34a',
   },
   valMismatch: {
-    backgroundColor: 'rgba(255,149,0,0.12)',
-    color: '#ff9500',
+    backgroundColor: 'rgba(234,88,12,0.1)',
+    color: '#ea580c',
   },
 });

@@ -25,8 +25,8 @@ export default function AppNavigator() {
       <Stack.Navigator
         initialRouteName="Dashboard"
         screenOptions={{
-          headerStyle: { backgroundColor: '#1a1a2e' },
-          headerTintColor: '#e0e0ff',
+          headerStyle: { backgroundColor: '#7A2422' },
+          headerTintColor: '#FDF6EA',
           headerTitleStyle: { fontWeight: '700' },
           headerBackTitleVisible: false,
         }}
@@ -34,7 +34,7 @@ export default function AppNavigator() {
         <Stack.Screen
           name="Dashboard"
           component={DashboardScreen}
-          options={{ title: 'Answer Sheet Analysis', headerShown: false }}
+          options={{ title: 'Mulyank', headerShown: false }}
         />
         <Stack.Screen
           name="Capture"

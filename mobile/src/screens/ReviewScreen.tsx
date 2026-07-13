@@ -106,27 +106,27 @@ interface SubmissionRecord {
   validation_result?: ValidationResult;
 }
 
-// ── Design tokens ─────────────────────────────────────────────────────────────
-const BG          = '#0b0b0e';
-const SURFACE     = '#111116';
-const PANEL_BG    = '#0e0e13';
-const BORDER      = '#1e1e26';
-const ACCENT      = '#5f5af6';
-const TEXT        = '#e8e8f0';
-const TEXT_MUTED  = '#7a7a8c';
-const MUTED       = '#4a4a5a';
-const SUCCESS_BG   = 'rgba(16,185,129,0.07)';
-const SUCCESS_BORDER = 'rgba(16,185,129,0.25)';
-const SUCCESS_TEXT   = '#34d399';
-const WARN_BG     = 'rgba(245,158,11,0.07)';
-const WARN_BORDER  = 'rgba(245,158,11,0.25)';
-const WARN_TEXT    = '#fbbf24';
-const DANGER_BG   = 'rgba(239,68,68,0.07)';
-const DANGER_BORDER = 'rgba(239,68,68,0.25)';
-const DANGER_TEXT   = '#f87171';
-const INFO_BG     = 'rgba(59,130,246,0.07)';
-const INFO_BORDER  = 'rgba(59,130,246,0.25)';
-const INFO_TEXT    = '#60a5fa';
+// ── Mulyank design tokens ─────────────────────────────────────────────────────
+const BG          = '#FDF6EA';   // warm ivory
+const SURFACE     = '#FFFFFF';
+const PANEL_BG    = '#FBF0DF';
+const BORDER      = '#E8D8C8';
+const ACCENT      = '#7A2422';   // maroon primary
+const TEXT        = '#3A1F1A';   // warm dark brown
+const TEXT_MUTED  = '#9A7B6E';
+const MUTED       = '#B8998C';
+const SUCCESS_BG   = 'rgba(22,163,74,0.07)';
+const SUCCESS_BORDER = 'rgba(22,163,74,0.25)';
+const SUCCESS_TEXT   = '#16a34a';
+const WARN_BG     = 'rgba(234,88,12,0.07)';
+const WARN_BORDER  = 'rgba(234,88,12,0.25)';
+const WARN_TEXT    = '#ea580c';
+const DANGER_BG   = 'rgba(220,38,38,0.07)';
+const DANGER_BORDER = 'rgba(220,38,38,0.25)';
+const DANGER_TEXT   = '#dc2626';
+const INFO_BG     = 'rgba(122,36,34,0.06)';
+const INFO_BORDER  = 'rgba(122,36,34,0.2)';
+const INFO_TEXT    = '#7A2422';
 
 export default function ReviewScreen({ route, navigation }: Props) {
   const { imageUri, setId } = route.params;
@@ -961,7 +961,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     marginTop: 4,
     paddingVertical: 10,
-    backgroundColor: 'rgba(95,90,246,0.06)',
+    backgroundColor: 'rgba(122,36,34,0.05)',
     borderRadius: 9,
     borderWidth: 1,
     borderStyle: 'dashed',
@@ -1048,7 +1048,7 @@ const styles = StyleSheet.create({
     borderColor: BORDER,
   },
   secondaryButtonText: { color: TEXT_MUTED, fontSize: 14, fontWeight: '600' },
-  primaryButton: { backgroundColor: ACCENT },
-  primaryButtonText: { color: '#fff', fontSize: 15, fontWeight: '700' },
-  confirmButton: { backgroundColor: '#059669' },
+  primaryButton: { backgroundColor: '#7A2422' },
+  primaryButtonText: { color: '#FDF6EA', fontSize: 15, fontWeight: '700' },
+  confirmButton: { backgroundColor: '#FFC96E' },
 });
