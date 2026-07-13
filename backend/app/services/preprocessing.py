@@ -336,7 +336,16 @@ def preprocess_image(
         else:
             debug_reason = "no_4_sided_contour_found" if not debug_reason else debug_reason
 
-    # If all searches / validations fail, perform fallback copy of EXIF corrected original
+    # If all searches / validations fail, apply deskew + contrast enhancement on the fallback image itself
+    # so that the resulting uploaded booklet scan is still straightened and highly legible for Claude.
     logger.warning(f"Preprocessing fallback triggered. Reason: {debug_reason}")
-    cv2.imwrite(str(output_p), fallback_img)
+    try:
+        deskewed = deskew_image(fallback_img)
+        processed = enhance_contrast_clahe(deskewed)
+        cv2.imwrite(str(output_p), processed)
+        logger.info("Fallback image deskewed and contrast enhanced successfully.")
+    except Exception as e:
+        logger.error(f"Failed to process fallback image ({e}). Writing un-processed fallback image.")
+        cv2.imwrite(str(output_p), fallback_img)
+
     return "fallback", debug_reason
