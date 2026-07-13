@@ -330,3 +330,76 @@ async def get_extraction_result(submission_id: str):
     }
 
 
+# ---------------------------------------------------------------------------
+# Validation Endpoints (Phase 4)
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/{submission_id}/validate",
+    response_model=SubmissionRecord,
+    summary="Compute arithmetic validation on extracted marks data",
+)
+async def validate_submission_data(submission_id: str) -> SubmissionRecord:
+    """
+    Runs the arithmetic checks on the extracted booklet marks data.
+    Requires extraction_status to be 'success'.
+    """
+    record_dict = _submissions.get(submission_id)
+    if record_dict is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Submission '{submission_id}' not found.",
+        )
+
+    record = SubmissionRecord(**record_dict)
+
+    if record.extraction_status != "success" or not record.extraction_result:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot validate submission data: Details extraction is not in 'success' state.",
+        )
+
+    # Run the validation
+    from app.services.validation import validate_extraction_result
+
+    try:
+        validation_result = validate_extraction_result(record.extraction_result)
+        record.validation_status = "success"
+        record.validation_result = validation_result
+    except Exception as e:
+        record.validation_status = "failed"
+        record.validation_result = None
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Validation computation failed: {str(e)}",
+        )
+
+    # Save to store
+    _submissions[submission_id] = record.model_dump()
+    return record
+
+
+@router.get(
+    "/{submission_id}/validation",
+    summary="Get stored validation result",
+)
+async def get_validation_result(submission_id: str):
+    """
+    Returns only the structured validation result.
+    """
+    record_dict = _submissions.get(submission_id)
+    if record_dict is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Submission '{submission_id}' not found.",
+        )
+
+    record = SubmissionRecord(**record_dict)
+    return {
+        "submission_id": submission_id,
+        "validation_status": record.validation_status,
+        "validation_result": record.validation_result,
+    }
+
+
+

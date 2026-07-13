@@ -70,11 +70,27 @@ class ExtractionResponse(BaseModel):
     data: ExtractionResult
 
 
-class ValidationStatus(BaseModel):
-    """Result of arithmetic cross-check (Phase 1)."""
-    per_question_ok: bool
-    grand_total_ok: bool
-    mismatches: list[str] = Field(default_factory=list)
+class QuestionValidation(BaseModel):
+    """Result of cross-checking sub-part marks for a single question."""
+    question_no: int
+    computed_sum: float
+    declared_total: float
+    match: bool
+
+
+class GrandTotalValidation(BaseModel):
+    """Result of cross-checking all question totals against declared grand total."""
+    computed_sum: float
+    declared_total: float
+    match: bool
+
+
+class ValidationResult(BaseModel):
+    """Consolidated validation results detailing status and issues."""
+    overall_status: Literal["valid", "mismatch", "incomplete"]
+    question_level: list[QuestionValidation] = Field(default_factory=list)
+    grand_total: GrandTotalValidation
+    issues: list[str] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -98,6 +114,10 @@ class SubmissionRecord(BaseModel):
     extraction_status: Literal["pending", "success", "failed"] = "pending"
     extraction_result: Optional[ExtractionResult] = None
     extraction_error: Optional[str] = None
+
+    # Validation fields (Phase 4)
+    validation_status: Literal["pending", "success", "failed"] = "pending"
+    validation_result: Optional[ValidationResult] = None
 
     # Normalized region of interest (fractional 0.0 - 1.0)
     roi_x: Optional[float] = None
