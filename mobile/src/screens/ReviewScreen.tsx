@@ -18,6 +18,8 @@ import {
   StyleSheet,
   Text,
   View,
+  TextInput,
+  Alert,
 } from 'react-native';
 import axios, { AxiosError } from 'axios';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -120,6 +122,16 @@ export default function ReviewScreen({ route, navigation }: Props) {
   // Holds either the local captured image URI or the remote preprocessed URL
   const [displayUri, setDisplayUri] = useState<string>(imageUri);
 
+  // ── Phase 5: Local Form State Hooks ───────────────────────────────────────
+  const [formName, setFormName] = useState('');
+  const [formRollNo, setFormRollNo] = useState('');
+  const [formBranch, setFormBranch] = useState('');
+  const [formSubject, setFormSubject] = useState('');
+  const [formDate, setFormDate] = useState('');
+  const [formMarksEntries, setFormMarksEntries] = useState<MarksEntry[]>([]);
+  const [formQuestionTotals, setFormQuestionTotals] = useState<QuestionTotal[]>([]);
+  const [formGrandTotal, setFormGrandTotal] = useState('');
+
   // ── Upload & Preprocess Handler (Phase 2) ─────────────────────────────────
   const handleUploadAndPreprocess = useCallback(async () => {
     setFlowState('uploading');
@@ -201,7 +213,18 @@ export default function ReviewScreen({ route, navigation }: Props) {
       );
 
       if (extractResponse.data.extraction_status === 'success' && extractResponse.data.extraction_result) {
-        setExtractionResult(extractResponse.data.extraction_result);
+        const extData = extractResponse.data.extraction_result;
+        setExtractionResult(extData);
+
+        // ── Phase 5: Initialize Form State from Extracted Details ────────────
+        setFormName(extData.name || '');
+        setFormRollNo(extData.roll_no || '');
+        setFormBranch(extData.branch || '');
+        setFormSubject(extData.subject || '');
+        setFormDate(extData.date || '');
+        setFormMarksEntries(extData.marks_entries || []);
+        setFormQuestionTotals(extData.question_totals || []);
+        setFormGrandTotal(extData.total_marks_declared !== null ? String(extData.total_marks_declared) : '');
 
         // ── Phase 4: Automatic Local Arithmetic Validation ───────────────────
         try {
@@ -238,6 +261,150 @@ export default function ReviewScreen({ route, navigation }: Props) {
     setValidationResult(null);
     navigation.goBack();
   }, [navigation]);
+
+  // ── Phase 5: Debounced Live Re-Validation Hook ───────────────────────────
+  React.useEffect(() => {
+    if (flowState !== 'extracted' || !submissionId) return;
+
+    const delayTimer = setTimeout(async () => {
+      try {
+        const payload = {
+          name: formName,
+          roll_no: formRollNo,
+          branch: formBranch,
+          subject: formSubject,
+          date: formDate,
+          marks_entries: formMarksEntries.map((e) => ({
+            question_no: parseInt(String(e.question_no)) || 1,
+            part: e.part || 'a',
+            marks: parseFloat(String(e.marks)) || 0.0,
+          })),
+          question_totals: formQuestionTotals.map((q) => ({
+            question_no: parseInt(String(q.question_no)) || 1,
+            total: parseFloat(String(q.total)) || 0.0,
+          })),
+          total_marks_declared: formGrandTotal === '' ? null : parseFloat(formGrandTotal),
+          field_confidence: extractionResult?.field_confidence || { name: 'high', roll_no: 'high' },
+        };
+
+        const response = await axios.post<ValidationResult>(
+          `${API_BASE_URL}/submissions/validate/preview`,
+          payload
+        );
+        setValidationResult(response.data);
+      } catch (err) {
+        console.warn('Live validation preview failed:', err);
+      }
+    }, 450); // 450ms debounce delay
+
+    return () => clearTimeout(delayTimer);
+  }, [
+    formName,
+    formRollNo,
+    formBranch,
+    formSubject,
+    formDate,
+    formMarksEntries,
+    formQuestionTotals,
+    formGrandTotal,
+    flowState,
+    submissionId,
+    extractionResult,
+  ]);
+
+  // ── Phase 5: Form Action Helpers ──────────────────────────────────────────
+  const handleAddMarkEntry = () => {
+    setFormMarksEntries((prev) => [...prev, { question_no: 1, part: 'a', marks: 0.0 }]);
+  };
+
+  const handleDeleteMarkEntry = (idx: number) => {
+    setFormMarksEntries((prev) => prev.filter((_, i) => i !== idx));
+  };
+
+  const handleUpdateMarkEntry = (idx: number, key: 'question_no' | 'part' | 'marks', value: string) => {
+    setFormMarksEntries((prev) =>
+      prev.map((item, i) => {
+        if (i === idx) {
+          if (key === 'question_no') {
+            return { ...item, question_no: parseInt(value) || 1 };
+          }
+          if (key === 'part') {
+            return { ...item, part: value.toLowerCase().slice(0, 1) };
+          }
+          if (key === 'marks') {
+            return { ...item, marks: parseFloat(value) || 0.0 };
+          }
+        }
+        return item;
+      })
+    );
+  };
+
+  const handleUpdateQuestionTotal = (q_no: number, value: string) => {
+    setFormQuestionTotals((prev) =>
+      prev.map((item) => {
+        if (item.question_no === q_no) {
+          return { ...item, total: parseFloat(value) || 0.0 };
+        }
+        return item;
+      })
+    );
+  };
+
+  const handleConfirmAndSave = async () => {
+    if (!submissionId) return;
+
+    const saveAction = async () => {
+      setFlowState('uploading'); // displays loading indicators
+      try {
+        const payload = {
+          name: formName,
+          roll_no: formRollNo,
+          branch: formBranch,
+          subject: formSubject,
+          date: formDate,
+          marks_entries: formMarksEntries.map((e) => ({
+            question_no: parseInt(String(e.question_no)) || 1,
+            part: e.part || 'a',
+            marks: parseFloat(String(e.marks)) || 0.0,
+          })),
+          question_totals: formQuestionTotals.map((q) => ({
+            question_no: parseInt(String(q.question_no)) || 1,
+            total: parseFloat(String(q.total)) || 0.0,
+          })),
+          total_marks_declared: formGrandTotal === '' ? null : parseFloat(formGrandTotal),
+          field_confidence: extractionResult?.field_confidence || { name: 'high', roll_no: 'high' },
+        };
+
+        await axios.put(
+          `${API_BASE_URL}/submissions/${submissionId}/extraction`,
+          payload
+        );
+
+        // Successfully confirmed, return to Capture stack
+        navigation.popToTop();
+      } catch (err) {
+        console.error('Save failed:', err);
+        setErrorMessage('Failed to save booklet updates.');
+        setFlowState('extracted');
+      }
+    };
+
+    // Warn teacher if validation is unresolved before saving
+    if (validationResult && validationResult.overall_status !== 'valid') {
+      const discrepancyCount = validationResult.issues.length;
+      Alert.alert(
+        'Unresolved Discrepancies',
+        `There are still ${discrepancyCount} validation mismatches unresolved. Save anyway?`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Save Anyway', onPress: saveAction },
+        ]
+      );
+    } else {
+      await saveAction();
+    }
+  };
 
   // ── Helper: Format Marks Entries ──────────────────────────────────────────
   const getFormattedMarksBreakdown = () => {
@@ -351,7 +518,7 @@ export default function ReviewScreen({ route, navigation }: Props) {
             <View style={styles.card}>
               <Text style={styles.cardHeader}>Student Info</Text>
 
-              {/* Name Field (with confidence warning indicator) */}
+              {/* Name Field */}
               <View
                 style={[
                   styles.fieldRow,
@@ -359,15 +526,16 @@ export default function ReviewScreen({ route, navigation }: Props) {
                 ]}
               >
                 <Text style={styles.fieldLabel}>Name:</Text>
-                <View style={styles.fieldValueContainer}>
-                  <Text style={styles.fieldValue}>{extractionResult.name || 'Not detected'}</Text>
-                  {extractionResult.field_confidence.name === 'low' && (
-                    <Text style={styles.warningTag}>⚠️ Low Confidence</Text>
-                  )}
-                </View>
+                <TextInput
+                  style={styles.fieldInput}
+                  value={formName}
+                  onChangeText={setFormName}
+                  placeholder="Student Name"
+                  placeholderTextColor="#64748b"
+                />
               </View>
 
-              {/* Roll No Field (with confidence warning indicator) */}
+              {/* Roll No Field */}
               <View
                 style={[
                   styles.fieldRow,
@@ -375,46 +543,113 @@ export default function ReviewScreen({ route, navigation }: Props) {
                 ]}
               >
                 <Text style={styles.fieldLabel}>Roll No:</Text>
-                <View style={styles.fieldValueContainer}>
-                  <Text style={styles.fieldValue}>{extractionResult.roll_no || 'Not detected'}</Text>
-                  {extractionResult.field_confidence.roll_no === 'low' && (
-                    <Text style={styles.warningTag}>⚠️ Low Confidence</Text>
-                  )}
-                </View>
+                <TextInput
+                  style={styles.fieldInput}
+                  value={formRollNo}
+                  onChangeText={setFormRollNo}
+                  placeholder="CS2026-99"
+                  placeholderTextColor="#64748b"
+                />
               </View>
 
               {/* Branch */}
               <View style={styles.fieldRow}>
                 <Text style={styles.fieldLabel}>Branch:</Text>
-                <Text style={styles.fieldValue}>{extractionResult.branch || 'Not detected'}</Text>
+                <TextInput
+                  style={styles.fieldInput}
+                  value={formBranch}
+                  onChangeText={setFormBranch}
+                  placeholder="Branch"
+                  placeholderTextColor="#64748b"
+                />
               </View>
 
               {/* Subject */}
               <View style={styles.fieldRow}>
                 <Text style={styles.fieldLabel}>Subject:</Text>
-                <Text style={styles.fieldValue}>{extractionResult.subject || 'Not detected'}</Text>
+                <TextInput
+                  style={styles.fieldInput}
+                  value={formSubject}
+                  onChangeText={setFormSubject}
+                  placeholder="Subject"
+                  placeholderTextColor="#64748b"
+                />
               </View>
 
               {/* Date */}
               <View style={styles.fieldRow}>
                 <Text style={styles.fieldLabel}>Date:</Text>
-                <Text style={styles.fieldValue}>{extractionResult.date || 'Not detected'}</Text>
+                <TextInput
+                  style={styles.fieldInput}
+                  value={formDate}
+                  onChangeText={setFormDate}
+                  placeholder="YYYY-MM-DD"
+                  placeholderTextColor="#64748b"
+                />
               </View>
             </View>
 
             {/* Marks Breakdown */}
             <View style={styles.card}>
               <Text style={styles.cardHeader}>Sub-Question Marks</Text>
-              <Text style={styles.marksBreakdownText}>{getFormattedMarksBreakdown()}</Text>
+              {formMarksEntries.length === 0 ? (
+                <Text style={styles.emptyText}>No marks entries. Tap "+ Add" below.</Text>
+              ) : (
+                formMarksEntries.map((entry, idx) => (
+                  <View key={idx} style={styles.marksEditRow}>
+                    <Text style={styles.marksEditLabel}>Q: </Text>
+                    <TextInput
+                      style={[styles.marksInput, styles.marksInputQ]}
+                      value={String(entry.question_no)}
+                      onChangeText={(val) => handleUpdateMarkEntry(idx, 'question_no', val)}
+                      keyboardType="numeric"
+                      placeholder="Q"
+                      placeholderTextColor="#64748b"
+                    />
+                    <Text style={styles.marksEditLabel}>Part: </Text>
+                    <TextInput
+                      style={[styles.marksInput, styles.marksInputPart]}
+                      value={entry.part}
+                      onChangeText={(val) => handleUpdateMarkEntry(idx, 'part', val)}
+                      maxLength={1}
+                      placeholder="Part"
+                      placeholderTextColor="#64748b"
+                    />
+                    <Text style={styles.marksEditLabel}>Marks: </Text>
+                    <TextInput
+                      style={[styles.marksInput, styles.marksInputVal]}
+                      value={String(entry.marks)}
+                      onChangeText={(val) => handleUpdateMarkEntry(idx, 'marks', val)}
+                      keyboardType="numeric"
+                      placeholder="Marks"
+                      placeholderTextColor="#64748b"
+                    />
+                    <Pressable
+                      style={styles.deleteMarkButton}
+                      onPress={() => handleDeleteMarkEntry(idx)}
+                      accessibilityLabel={`Delete entry ${idx + 1}`}
+                    >
+                      <Text style={styles.deleteMarkText}>🗑️</Text>
+                    </Pressable>
+                  </View>
+                ))
+              )}
+              <Pressable
+                style={styles.addMarkButton}
+                onPress={handleAddMarkEntry}
+                accessibilityLabel="Add new subpart marks row"
+              >
+                <Text style={styles.addMarkButtonText}>+ Add Sub-part Mark</Text>
+              </Pressable>
             </View>
 
             {/* Question Totals (transcribed totals vs declared) */}
             <View style={styles.card}>
               <Text style={styles.cardHeader}>Examiner Totals</Text>
-              {extractionResult.question_totals.length === 0 ? (
+              {formQuestionTotals.length === 0 ? (
                 <Text style={styles.emptyText}>No question totals detected.</Text>
               ) : (
-                extractionResult.question_totals.map((tot) => {
+                formQuestionTotals.map((tot) => {
                   const qVal = validationResult?.question_level.find(
                     (q) => q.question_no === tot.question_no
                   );
@@ -429,7 +664,13 @@ export default function ReviewScreen({ route, navigation }: Props) {
                     >
                       <Text style={styles.totalLabel}>Question {tot.question_no}:</Text>
                       <View style={styles.row}>
-                        <Text style={styles.totalValue}>{tot.total} Marks</Text>
+                        <TextInput
+                          style={styles.totalInput}
+                          value={String(tot.total)}
+                          onChangeText={(val) => handleUpdateQuestionTotal(tot.question_no, val)}
+                          keyboardType="numeric"
+                        />
+                        <Text style={styles.totalUnitText}> Marks</Text>
                         {qVal && (
                           qVal.match ? (
                             <Text style={styles.matchPassTag}>  ✅</Text>
@@ -453,11 +694,15 @@ export default function ReviewScreen({ route, navigation }: Props) {
               >
                 <Text style={styles.grandTotalLabel}>Declared Grand Total:</Text>
                 <View style={styles.row}>
-                  <Text style={styles.grandTotalValue}>
-                    {extractionResult.total_marks_declared !== null
-                      ? `${extractionResult.total_marks_declared} Marks`
-                      : 'Not detected'}
-                  </Text>
+                  <TextInput
+                    style={[styles.totalInput, styles.grandTotalInputStyle]}
+                    value={formGrandTotal}
+                    onChangeText={setFormGrandTotal}
+                    keyboardType="numeric"
+                    placeholder="Grand Total"
+                    placeholderTextColor="#64748b"
+                  />
+                  <Text style={styles.totalUnitText}> Marks</Text>
                   {validationResult && (
                     validationResult.grand_total.match ? (
                       <Text style={styles.matchPassTag}>  ✅</Text>
@@ -503,15 +748,15 @@ export default function ReviewScreen({ route, navigation }: Props) {
         {/* State: Error Banner */}
         {flowState === 'error' && errorMessage && (
           <View style={styles.errorBanner}>
-            <Text style={styles.errorIcon}>❌</Text>
-            <View style={styles.errorTextContainer}>
-              <Text style={styles.errorTitle}>Process Failed</Text>
-              <Text style={styles.errorDetail}>{errorMessage}</Text>
+            <Text style={styles.alertIcon}>⚠️</Text>
+            <View style={styles.successTextContainer}>
+              <Text style={styles.errorTitle}>Error Occurred</Text>
+              <Text style={styles.errorSub}>{errorMessage}</Text>
             </View>
           </View>
         )}
 
-        {/* Buttons Control Row */}
+        {/* ── Action Buttons Bottom Row ──────────────────────────────────────── */}
         <View style={styles.buttonRow}>
           {/* Retake / Cancel (Discard current submission) */}
           <Pressable
@@ -524,7 +769,7 @@ export default function ReviewScreen({ route, navigation }: Props) {
             disabled={isWorking}
           >
             <Text style={styles.retakeButtonText}>
-              {flowState === 'extracted' ? 'Done / Scan Next' : '↩ Retake'}
+              {flowState === 'extracted' ? '↩ Discard / Back' : '↩ Cancel'}
             </Text>
           </Pressable>
 
@@ -551,30 +796,40 @@ export default function ReviewScreen({ route, navigation }: Props) {
                 </Text>
               )}
             </Pressable>
-          ) : (
+          ) : flowState === 'preprocessed' ? (
             // Shown after image is ready on the server: triggers extraction
-            flowState !== 'extracted' && (
-              <Pressable
-                style={({ pressed }) => [
-                  styles.button,
-                  styles.extractButton,
-                  flowState === 'extracting' && styles.buttonDisabled,
-                  pressed && styles.buttonPressed,
-                ]}
-                onPress={handleExtractDetails}
-                disabled={flowState === 'extracting'}
-              >
-                {flowState === 'extracting' ? (
-                  <View style={styles.row}>
-                    <ActivityIndicator color="#fff" size="small" style={styles.spinner} />
-                    <Text style={styles.uploadButtonText}>Extracting details…</Text>
-                  </View>
-                ) : (
-                  <Text style={styles.uploadButtonText}>🔍 Extract Details</Text>
-                )}
-              </Pressable>
-            )
-          )}
+            <Pressable
+              style={({ pressed }) => [
+                styles.button,
+                styles.extractButton,
+                flowState === 'extracting' && styles.buttonDisabled,
+                pressed && styles.buttonPressed,
+              ]}
+              onPress={handleExtractDetails}
+              disabled={flowState === 'extracting'}
+            >
+              {flowState === 'extracting' ? (
+                <View style={styles.row}>
+                  <ActivityIndicator color="#fff" size="small" style={styles.spinner} />
+                  <Text style={styles.uploadButtonText}>Extracting details…</Text>
+                </View>
+              ) : (
+                <Text style={styles.uploadButtonText}>🔍 Extract Details</Text>
+              )}
+            </Pressable>
+          ) : flowState === 'extracted' ? (
+            // Shown after details are extracted: triggers final confirm and save
+            <Pressable
+              style={({ pressed }) => [
+                styles.button,
+                styles.confirmButton,
+                pressed && styles.buttonPressed,
+              ]}
+              onPress={handleConfirmAndSave}
+            >
+              <Text style={styles.confirmButtonText}>💾 Confirm & Save</Text>
+            </Pressable>
+          ) : null}
         </View>
       </ScrollView>
     </View>
@@ -949,6 +1204,107 @@ const styles = StyleSheet.create({
   matchFailTag: {
     color: '#f87171',
     fontSize: 12,
+    fontWeight: '700',
+  },
+
+  // ── Phase 5 Form Input Styles ─────────────────────────────────────────────
+  fieldInput: {
+    flex: 1,
+    color: '#f8fafc',
+    fontSize: 14,
+    fontWeight: '700',
+    textAlign: 'right',
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    backgroundColor: 'rgba(255,255,255,0.03)',
+    borderRadius: 6,
+    marginLeft: 12,
+  },
+  marksEditRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 4,
+  },
+  marksEditLabel: {
+    color: '#64748b',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  marksInput: {
+    color: '#f8fafc',
+    fontSize: 14,
+    backgroundColor: 'rgba(255,255,255,0.03)',
+    borderRadius: 6,
+    paddingVertical: 6,
+    paddingHorizontal: 8,
+    textAlign: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+  },
+  marksInputQ: {
+    flex: 1.5,
+  },
+  marksInputPart: {
+    flex: 1.5,
+  },
+  marksInputVal: {
+    flex: 2,
+  },
+  deleteMarkButton: {
+    padding: 8,
+    backgroundColor: 'rgba(239, 68, 68, 0.1)',
+    borderRadius: 6,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  deleteMarkText: {
+    fontSize: 14,
+  },
+  addMarkButton: {
+    marginTop: 8,
+    paddingVertical: 10,
+    backgroundColor: 'rgba(99, 102, 241, 0.12)',
+    borderRadius: 8,
+    borderWidth: 1.5,
+    borderStyle: 'dashed',
+    borderColor: '#6366f1',
+    alignItems: 'center',
+  },
+  addMarkButtonText: {
+    color: '#a5b4fc',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  totalInput: {
+    color: '#cbd5e1',
+    fontSize: 13,
+    fontWeight: '600',
+    backgroundColor: 'rgba(255,255,255,0.03)',
+    borderRadius: 6,
+    paddingVertical: 2,
+    paddingHorizontal: 6,
+    width: 60,
+    textAlign: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+  },
+  grandTotalInputStyle: {
+    color: '#ec4899',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  totalUnitText: {
+    color: '#94a3b8',
+    fontSize: 13,
+    marginLeft: 4,
+  },
+  confirmButton: {
+    backgroundColor: '#10b981',
+  },
+  confirmButtonText: {
+    color: '#fff',
+    fontSize: 15,
     fontWeight: '700',
   },
 });
