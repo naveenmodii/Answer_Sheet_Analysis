@@ -73,3 +73,56 @@ def append_submission_to_excel(record: SubmissionRecord) -> str:
     ws.append(row_data)
     wb.save(EXPORT_FILE)
     return str(EXPORT_FILE)
+
+
+def compile_session_to_excel(session_id: str, records: list[SubmissionRecord]) -> str:
+    """
+    Creates a new spreadsheet for the active session, appending all confirmed records.
+    Saves the spreadsheet at exports/{session_id}.xlsx and returns the file path.
+    """
+    EXPORT_DIR.mkdir(parents=True, exist_ok=True)
+    session_file = EXPORT_DIR / f"{session_id}.xlsx"
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Consolidated Session Marks"
+
+    headers = [
+        "Name",
+        "Roll No",
+        "Branch",
+        "Subject",
+        "Date",
+        "Marks Breakdown",
+        "Total Marks",
+        "Validation Status",
+    ]
+    ws.append(headers)
+
+    for record in records:
+        if not record.extraction_result:
+            continue
+        ext = record.extraction_result
+        marks_str = ", ".join(
+            f"{entry.question_no}{entry.part}-{entry.marks}"
+            for entry in sorted(ext.marks_entries, key=lambda x: (x.question_no, x.part))
+        )
+
+        val_status = "Discrepancy noted"
+        if record.validation_result and record.validation_result.overall_status == "valid":
+            val_status = "Valid"
+
+        row_data = [
+            ext.name,
+            ext.roll_no,
+            ext.branch,
+            ext.subject,
+            ext.date,
+            marks_str,
+            ext.total_marks_declared,
+            val_status,
+        ]
+        ws.append(row_data)
+
+    wb.save(session_file)
+    return str(session_file)

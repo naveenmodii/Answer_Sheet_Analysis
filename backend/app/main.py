@@ -17,8 +17,11 @@ async def lifespan(app: FastAPI):
     # ---------------------------------------------------------------------------
     # Startup
     # ---------------------------------------------------------------------------
-    # Phase 1: image upload dir is created on first request (see submissions.py).
-    # Future: initialise MongoDB motor client, warm up OpenCV.
+    from app.services.database import init_db
+    try:
+        init_db()
+    except Exception as e:
+        print(f"Failed to initialize SQLite database: {e}")
     yield
     # ---------------------------------------------------------------------------
     # Shutdown

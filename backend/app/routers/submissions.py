@@ -68,6 +68,7 @@ def _ensure_uploads_dir() -> None:
 )
 async def create_submission(
     image: UploadFile = File(..., description="JPEG or PNG image of the booklet cover"),
+    session_id: str = Form(..., description="ID of the active batch scanning session"),
     roi_x: Optional[float] = Form(None, description="Normalized X coordinate of the guide rectangle"),
     roi_y: Optional[float] = Form(None, description="Normalized Y coordinate of the guide rectangle"),
     roi_w: Optional[float] = Form(None, description="Normalized width of the guide rectangle"),
@@ -75,12 +76,8 @@ async def create_submission(
 ) -> SubmissionResponse:
     """
     Accept a multipart image upload, validate it, persist it to disk, and
-    return a submission record with a generated UUID. Also accepts optional
-    Region of Interest (ROI) fractional coordinates of the camera visual guide.
-
-    Validations:
-    - Content-Type must be image/jpeg or image/png (HTTP 415).
-    - File size must not exceed 15 MB (HTTP 413).
+    return a submission record with a generated UUID. Also associates with a session_id
+    and registers in SQLite app.db database.
     """
     # ── 1. Validate content type ─────────────────────────────────────────────
     content_type = (image.content_type or "").split(";")[0].strip().lower()
@@ -113,7 +110,7 @@ async def create_submission(
     saved_path = UPLOADS_DIR / filename
     saved_path.write_bytes(file_bytes)
 
-    # ── 5. Store record in memory ─────────────────────────────────────────────
+    # ── 5. Store record in SQLite database ────────────────────────────────────
     original_filename = image.filename or "unknown"
     record = SubmissionRecord(
         submission_id=submission_id,
@@ -127,7 +124,8 @@ async def create_submission(
         roi_w=roi_w,
         roi_h=roi_h,
     )
-    _submissions[submission_id] = record.model_dump()
+    from app.services.database import save_submission
+    save_submission(record, session_id)
 
     return SubmissionResponse(submission_id=submission_id, status="received")
 
@@ -138,14 +136,15 @@ async def create_submission(
     summary="Retrieve a submission record",
 )
 async def get_submission(submission_id: str) -> SubmissionRecord:
-    """Return the stored record for the given submission ID, or 404."""
-    record = _submissions.get(submission_id)
+    """Return the stored record from SQLite database for the given ID, or 404."""
+    from app.services.database import get_submission as db_get_submission
+    record = db_get_submission(submission_id)
     if record is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Submission '{submission_id}' not found.",
         )
-    return SubmissionRecord(**record)
+    return record
 
 
 # ---------------------------------------------------------------------------
@@ -162,15 +161,14 @@ async def preprocess_submission(submission_id: str) -> SubmissionRecord:
     Triggers the booklet preprocessing pipeline on the uploaded image.
     Crops, aligns, deskews, and enhances contrast.
     """
-    # ── 1. Fetch record ──────────────────────────────────────────────────────
-    record_dict = _submissions.get(submission_id)
-    if record_dict is None:
+    # ── 1. Fetch record ────────────────--------------------------------------
+    from app.services.database import get_submission, save_submission, get_db_connection
+    record = get_submission(submission_id)
+    if record is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Submission '{submission_id}' not found.",
         )
-
-    record = SubmissionRecord(**record_dict)
 
     # ── 2. Derive output paths ───────────────────────────────────────────────
     input_path = record.saved_path
@@ -198,14 +196,19 @@ async def preprocess_submission(submission_id: str) -> SubmissionRecord:
     # Therefore, we pass roi=None to run contour detection directly on the cropped bounds.
     status_result, debug_reason = preprocess_image(input_path, str(processed_path), None)
 
-    # ── 4. Update memory store record ────────────────────────────────────────
+    # ── 4. Update SQLite database record ──────────────────────────────────────
     record.preprocessing_status = status_result
     record.preprocessing_debug_reason = debug_reason
     record.processed_image_path = str(processed_path)
     record.status = "processing" if status_result == "success" else "error" if status_result == "fallback" else record.status
 
-    # Keep original status but update preprocessing specifics
-    _submissions[submission_id] = record.model_dump()
+    # Retrieve associated session_id first to satisfy FK constraint
+    conn = get_db_connection()
+    row = conn.execute("SELECT session_id FROM submissions WHERE submission_id = ?", (submission_id,)).fetchone()
+    session_id = row["session_id"] if row else "unknown"
+    conn.close()
+
+    save_submission(record, session_id)
 
     return record
 
@@ -219,14 +222,13 @@ async def get_preprocessed_image(submission_id: str):
     Returns the preprocessed image file. Falls back to returning the
     EXIF-corrected original image if preprocessing failed/fell back.
     """
-    record_dict = _submissions.get(submission_id)
-    if record_dict is None:
+    from app.services.database import get_submission
+    record = get_submission(submission_id)
+    if record is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Submission '{submission_id}' not found.",
         )
-
-    record = SubmissionRecord(**record_dict)
 
     # Determine which file to serve
     if record.processed_image_path and os.path.exists(record.processed_image_path):
@@ -261,15 +263,14 @@ async def extract_submission_details(submission_id: str) -> SubmissionRecord:
     (or falls back to the original if preprocessing fell back).
     Defensively handles parsing/validation errors and sets error codes accordingly.
     """
-    # ── 1. Fetch record ──────────────────────────────────────────────────────
-    record_dict = _submissions.get(submission_id)
-    if record_dict is None:
+    # ── 1. Fetch record ────────────────--------------------------------------
+    from app.services.database import get_submission, save_submission, get_db_connection
+    record = get_submission(submission_id)
+    if record is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Submission '{submission_id}' not found.",
         )
-
-    record = SubmissionRecord(**record_dict)
 
     # ── 2. Determine target image file for extraction ────────────────────────
     # Use preprocessed image if available, else original EXIF-corrected upload
@@ -302,8 +303,13 @@ async def extract_submission_details(submission_id: str) -> SubmissionRecord:
         record.extraction_error = str(e)
         record.status = "error"
 
-    # ── 4. Save updated record in-memory ──────────────────────────────────────
-    _submissions[submission_id] = record.model_dump()
+    # ── 4. Save updated record in SQLite database ─────────────────────────────
+    conn = get_db_connection()
+    row = conn.execute("SELECT session_id FROM submissions WHERE submission_id = ?", (submission_id,)).fetchone()
+    session_id = row["session_id"] if row else "unknown"
+    conn.close()
+
+    save_submission(record, session_id)
 
     return record
 
@@ -317,14 +323,14 @@ async def get_extraction_result(submission_id: str):
     Returns only the structured extraction JSON payload or error status
     for simplified verification.
     """
-    record_dict = _submissions.get(submission_id)
-    if record_dict is None:
+    from app.services.database import get_submission
+    record = get_submission(submission_id)
+    if record is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Submission '{submission_id}' not found.",
         )
 
-    record = SubmissionRecord(**record_dict)
     return {
         "submission_id": submission_id,
         "extraction_status": record.extraction_status,
@@ -347,14 +353,13 @@ async def validate_submission_data(submission_id: str) -> SubmissionRecord:
     Runs the arithmetic checks on the extracted booklet marks data.
     Requires extraction_status to be 'success'.
     """
-    record_dict = _submissions.get(submission_id)
-    if record_dict is None:
+    from app.services.database import get_submission, save_submission, get_db_connection
+    record = get_submission(submission_id)
+    if record is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Submission '{submission_id}' not found.",
         )
-
-    record = SubmissionRecord(**record_dict)
 
     if record.extraction_status != "success" or not record.extraction_result:
         raise HTTPException(
@@ -377,8 +382,13 @@ async def validate_submission_data(submission_id: str) -> SubmissionRecord:
             detail=f"Validation computation failed: {str(e)}",
         )
 
-    # Save to store
-    _submissions[submission_id] = record.model_dump()
+    # Save to SQLite database
+    conn = get_db_connection()
+    row = conn.execute("SELECT session_id FROM submissions WHERE submission_id = ?", (submission_id,)).fetchone()
+    session_id = row["session_id"] if row else "unknown"
+    conn.close()
+
+    save_submission(record, session_id)
     return record
 
 
@@ -390,14 +400,14 @@ async def get_validation_result(submission_id: str):
     """
     Returns only the structured validation result.
     """
-    record_dict = _submissions.get(submission_id)
-    if record_dict is None:
+    from app.services.database import get_submission
+    record = get_submission(submission_id)
+    if record is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Submission '{submission_id}' not found.",
         )
 
-    record = SubmissionRecord(**record_dict)
     return {
         "submission_id": submission_id,
         "validation_status": record.validation_status,
@@ -431,16 +441,16 @@ async def preview_validation(data: ExtractionResult) -> ValidationResult:
 async def update_extraction_result(submission_id: str, data: ExtractionResult) -> SubmissionRecord:
     """
     Overwrites the stored extraction_result with teacher edits, re-computes validation,
-    sets review_status to 'confirmed', and saves in-memory.
+    sets review_status to 'confirmed', performs disk cleanup of uploaded and preprocessed images,
+    and saves to database.
     """
-    record_dict = _submissions.get(submission_id)
-    if record_dict is None:
+    from app.services.database import get_submission, save_submission, get_db_connection
+    record = get_submission(submission_id)
+    if record is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Submission '{submission_id}' not found.",
         )
-
-    record = SubmissionRecord(**record_dict)
 
     # Overwrite extraction_result and mark extraction success
     record.extraction_result = data
@@ -455,83 +465,86 @@ async def update_extraction_result(submission_id: str, data: ExtractionResult) -
     # Mark review status confirmed
     record.review_status = "confirmed"
 
-    # Save to store
-    _submissions[submission_id] = record.model_dump()
+    # ── Phase 7: Physical Image Files Disk Cleanup ───────────────────────────
+    # Delete original upload file
+    if record.saved_path and os.path.exists(record.saved_path):
+        try:
+            os.remove(record.saved_path)
+            logger.info(f"Disk Cleanup: Deleted original image at {record.saved_path}")
+        except Exception as ex:
+            logger.error(f"Failed to delete original image at {record.saved_path}: {ex}")
+
+    # Delete preprocessed crop file
+    if record.processed_image_path and os.path.exists(record.processed_image_path):
+        try:
+            os.remove(record.processed_image_path)
+            logger.info(f"Disk Cleanup: Deleted preprocessed image at {record.processed_image_path}")
+        except Exception as ex:
+            logger.error(f"Failed to delete preprocessed image at {record.processed_image_path}: {ex}")
+
+    # Retrieve associated session_id to save
+    conn = get_db_connection()
+    row = conn.execute("SELECT session_id FROM submissions WHERE submission_id = ?", (submission_id,)).fetchone()
+    session_id = row["session_id"] if row else "unknown"
+    conn.close()
+
+    # Save to SQLite database
+    save_submission(record, session_id)
     return record
 
 
 # ---------------------------------------------------------------------------
-# Phase 6 Excel Export Endpoints
+# Phase 7 Session Management & Export Compilation
 # ---------------------------------------------------------------------------
 
 @router.post(
-    "/{submission_id}/export",
-    response_model=SubmissionRecord,
-    summary="Export confirmed submission to Excel spreadsheet",
+    "/sessions/{session_id}/compile",
+    summary="Compile consolidated session Excel spreadsheet",
 )
-async def export_submission_to_excel(submission_id: str) -> SubmissionRecord:
+async def compile_session_export(session_id: str):
     """
-    Appends the confirmed student extraction details to exports/marks.xlsx.
-    Requires review_status == 'confirmed'. Idempotent (won't append twice).
+    Compiles all confirmed submissions associated with session_id into a single
+    consolidated spreadsheet exports/{session_id}.xlsx and returns it.
     """
-    record_dict = _submissions.get(submission_id)
-    if record_dict is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Submission '{submission_id}' not found.",
-        )
+    from app.services.database import get_session_submissions
+    from app.services.excel_export import compile_session_to_excel
+    from fastapi.responses import FileResponse
 
-    record = SubmissionRecord(**record_dict)
-
-    if record.review_status != "confirmed":
+    # Load all confirmed booklets in this session
+    confirmed_records = get_session_submissions(session_id, confirmed_only=True)
+    if not confirmed_records:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Cannot export: submission must be confirmed by the review screen first.",
+            detail="Cannot compile session spreadsheet: no confirmed booklets found in this session.",
         )
-
-    # Idempotent safeguard: check if already exported
-    if record.export_status == "exported":
-        logger.info(f"Submission {submission_id} already exported. Skipping Excel append.")
-        return record
 
     try:
-        from app.services.excel_export import append_submission_to_excel
-        append_submission_to_excel(record)
-        record.export_status = "exported"
+        session_file_path = compile_session_to_excel(session_id, confirmed_records)
     except Exception as e:
-        logger.error(f"Excel append failed for {submission_id}: {e}")
+        logger.error(f"Session spreadsheet compilation failed for {session_id}: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Spreadsheet update failed: {str(e)}",
-        )
-
-    # Save to store
-    _submissions[submission_id] = record.model_dump()
-    return record
-
-
-@router.get(
-    "/export/download",
-    summary="Download the compiled Excel spreadsheet",
-)
-async def download_excel_spreadsheet():
-    """
-    Returns the consolidated marks.xlsx spreadsheet as a file response.
-    """
-    from fastapi.responses import FileResponse
-    from app.services.excel_export import EXPORT_FILE
-
-    if not EXPORT_FILE.exists():
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Spreadsheet marks.xlsx has not been generated yet. Please export a booklet first.",
+            detail=f"Failed to generate consolidated spreadsheet: {str(e)}",
         )
 
     return FileResponse(
-        path=str(EXPORT_FILE),
+        path=session_file_path,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        filename="marks.xlsx",
+        filename=f"session_{session_id}.xlsx",
     )
+
+
+@router.get(
+    "/sessions/{session_id}/submissions/count",
+    summary="Get count of confirmed booklets in this scan session",
+)
+async def get_session_confirmed_count(session_id: str):
+    """
+    Returns the count of booklets confirmed/saved so far in this session.
+    """
+    from app.services.database import get_confirmed_count
+    count = get_confirmed_count(session_id)
+    return {"confirmed_count": count}
 
 
 
