@@ -457,5 +457,80 @@ async def update_extraction_result(submission_id: str, data: ExtractionResult) -
     return record
 
 
+# ---------------------------------------------------------------------------
+# Phase 6 Excel Export Endpoints
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/{submission_id}/export",
+    response_model=SubmissionRecord,
+    summary="Export confirmed submission to Excel spreadsheet",
+)
+async def export_submission_to_excel(submission_id: str) -> SubmissionRecord:
+    """
+    Appends the confirmed student extraction details to exports/marks.xlsx.
+    Requires review_status == 'confirmed'. Idempotent (won't append twice).
+    """
+    record_dict = _submissions.get(submission_id)
+    if record_dict is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Submission '{submission_id}' not found.",
+        )
+
+    record = SubmissionRecord(**record_dict)
+
+    if record.review_status != "confirmed":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot export: submission must be confirmed by the review screen first.",
+        )
+
+    # Idempotent safeguard: check if already exported
+    if record.export_status == "exported":
+        logger.info(f"Submission {submission_id} already exported. Skipping Excel append.")
+        return record
+
+    try:
+        from app.services.excel_export import append_submission_to_excel
+        append_submission_to_excel(record)
+        record.export_status = "exported"
+    except Exception as e:
+        logger.error(f"Excel append failed for {submission_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Spreadsheet update failed: {str(e)}",
+        )
+
+    # Save to store
+    _submissions[submission_id] = record.model_dump()
+    return record
+
+
+@router.get(
+    "/export/download",
+    summary="Download the compiled Excel spreadsheet",
+)
+async def download_excel_spreadsheet():
+    """
+    Returns the consolidated marks.xlsx spreadsheet as a file response.
+    """
+    from fastapi.responses import FileResponse
+    from app.services.excel_export import EXPORT_FILE
+
+    if not EXPORT_FILE.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Spreadsheet marks.xlsx has not been generated yet. Please export a booklet first.",
+        )
+
+    return FileResponse(
+        path=str(EXPORT_FILE),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        filename="marks.xlsx",
+    )
+
+
+
 
 

@@ -122,6 +122,9 @@ class SubmissionRecord(BaseModel):
     # Review status (Phase 5)
     review_status: Literal["pending", "confirmed"] = "pending"
 
+    # Export status (Phase 6)
+    export_status: Literal["not_exported", "exported"] = "not_exported"
+
     # Normalized region of interest (fractional 0.0 - 1.0)
     roi_x: Optional[float] = None
     roi_y: Optional[float] = None
