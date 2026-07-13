@@ -119,6 +119,9 @@ class SubmissionRecord(BaseModel):
     validation_status: Literal["pending", "success", "failed"] = "pending"
     validation_result: Optional[ValidationResult] = None
 
+    # Review status (Phase 5)
+    review_status: Literal["pending", "confirmed"] = "pending"
+
     # Normalized region of interest (fractional 0.0 - 1.0)
     roi_x: Optional[float] = None
     roi_y: Optional[float] = None

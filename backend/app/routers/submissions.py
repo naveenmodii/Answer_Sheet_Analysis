@@ -19,7 +19,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 
-from app.models.schemas import SubmissionRecord, SubmissionResponse
+from app.models.schemas import SubmissionRecord, SubmissionResponse, ExtractionResult, ValidationResult
 
 router = APIRouter(prefix="/submissions", tags=["Submissions"])
 
@@ -400,6 +400,62 @@ async def get_validation_result(submission_id: str):
         "validation_status": record.validation_status,
         "validation_result": record.validation_result,
     }
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 Corrections / Preview validation endpoints
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/validate/preview",
+    response_model=ValidationResult,
+    summary="Stateless preview validation of extraction result shaped payload",
+)
+async def preview_validation(data: ExtractionResult) -> ValidationResult:
+    """
+    Runs the arithmetic validation checks on a preview extraction data payload
+    without saving to the stored submission. Used during interactive editing on client.
+    """
+    from app.services.validation import validate_extraction_result
+    return validate_extraction_result(data)
+
+
+@router.put(
+    "/{submission_id}/extraction",
+    response_model=SubmissionRecord,
+    summary="Overwrite the stored extraction_result with corrected version",
+)
+async def update_extraction_result(submission_id: str, data: ExtractionResult) -> SubmissionRecord:
+    """
+    Overwrites the stored extraction_result with teacher edits, re-computes validation,
+    sets review_status to 'confirmed', and saves in-memory.
+    """
+    record_dict = _submissions.get(submission_id)
+    if record_dict is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Submission '{submission_id}' not found.",
+        )
+
+    record = SubmissionRecord(**record_dict)
+
+    # Overwrite extraction_result and mark extraction success
+    record.extraction_result = data
+    record.extraction_status = "success"
+
+    # Re-run validation using the pure function
+    from app.services.validation import validate_extraction_result
+    validation_res = validate_extraction_result(data)
+    record.validation_status = "success"
+    record.validation_result = validation_res
+
+    # Mark review status confirmed
+    record.review_status = "confirmed"
+
+    # Save to store
+    _submissions[submission_id] = record.model_dump()
+    return record
+
 
 
 
