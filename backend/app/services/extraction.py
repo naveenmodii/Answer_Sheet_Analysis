@@ -170,11 +170,20 @@ def extract_details_from_booklet(
     # ── 4. Parse Response Content Defensively ─────────────────────────────────
     raw_content = ""
     try:
-        # Extract response text
-        if response.content and len(response.content) > 0:
-            raw_content = response.content[0].text.strip()
+        # Extract response text by gathering all text block fragments (ignoring thinking/thinking-process blocks)
+        text_fragments = []
+        if response.content:
+            for block in response.content:
+                # Safely check if block has a text attribute or type == "text"
+                if hasattr(block, "text"):
+                    text_fragments.append(block.text)
+                elif getattr(block, "type", None) == "text" and hasattr(block, "text"):
+                    text_fragments.append(block.text)
+        
+        if text_fragments:
+            raw_content = "".join(text_fragments).strip()
         else:
-            raise ValueError("Empty response received from Claude.")
+            raise ValueError("Empty response or no text blocks received from Claude.")
 
         cleaned_json = raw_content.strip()
         # Locate markdown code block boundaries if present
