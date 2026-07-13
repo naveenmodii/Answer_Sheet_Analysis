@@ -128,33 +128,8 @@ const INFO_BG     = 'rgba(59,130,246,0.07)';
 const INFO_BORDER  = 'rgba(59,130,246,0.25)';
 const INFO_TEXT    = '#60a5fa';
 
-async function retryRequest<T>(
-  fn: () => Promise<T>,
-  retries = 3,
-  delay = 1000
-): Promise<T> {
-  try {
-    return await fn();
-  } catch (err) {
-    if (retries <= 0) {
-      throw err;
-    }
-    const isAxiosError = axios.isAxiosError(err);
-    const hasResponse = isAxiosError && err.response;
-    const isServerError = hasResponse && err.response!.status >= 500;
-    const isNetworkOrTimeout = !hasResponse || err.code === 'ECONNABORTED' || err.message === 'Network Error';
-
-    if (!isServerError && !isNetworkOrTimeout) {
-      throw err;
-    }
-    console.warn(`Request failed (${err.message}). Retrying in ${delay}ms... (${retries} left)`);
-    await new Promise((resolve) => setTimeout(resolve, delay));
-    return retryRequest(fn, retries - 1, delay * 2);
-  }
-}
-
 export default function ReviewScreen({ route, navigation }: Props) {
-  const { imageUri, sessionId } = route.params;
+  const { imageUri, setId } = route.params;
 
   const [flowState, setFlowState] = useState<FlowState>('idle');
   const [submissionId, setSubmissionId] = useState<string | null>(null);
@@ -190,30 +165,26 @@ export default function ReviewScreen({ route, navigation }: Props) {
         name: filename,
         type: 'image/jpeg',
       } as any);
-      // session_id is required by the backend (Form(...)) — always append it
-      formData.append('session_id', sessionId);
+      // set_id is required by the backend — always append it
+      formData.append('set_id', setId);
 
-      const uploadResponse = await retryRequest(() =>
-        axios.post<{ submission_id: string; status: string }>(
-          `${API_BASE_URL}/submissions`,
-          formData,
-          {
-            headers: { 'Content-Type': 'multipart/form-data' },
-            timeout: 30_000,
-          }
-        )
+      const uploadResponse = await axios.post<{ submission_id: string; status: string }>(
+        `${API_BASE_URL}/submissions`,
+        formData,
+        {
+          headers: { 'Content-Type': 'multipart/form-data' },
+          timeout: 30_000,
+        }
       );
 
       const subId = uploadResponse.data.submission_id;
       setSubmissionId(subId);
       setFlowState('preprocessing');
 
-      const prepResponse = await retryRequest(() =>
-        axios.post<SubmissionRecord>(
-          `${API_BASE_URL}/submissions/${subId}/preprocess`,
-          {},
-          { timeout: 30_000 }
-        )
+      const prepResponse = await axios.post<SubmissionRecord>(
+        `${API_BASE_URL}/submissions/${subId}/preprocess`,
+        {},
+        { timeout: 30_000 }
       );
 
       setPrepStatus(prepResponse.data.preprocessing_status);
@@ -232,7 +203,7 @@ export default function ReviewScreen({ route, navigation }: Props) {
       setErrorMessage(detail);
       setFlowState('error');
     }
-  }, [imageUri, sessionId]);
+  }, [imageUri, setId]);
 
   // ── Extract Details Handler ───────────────────────────────────────────────
   const handleExtractDetails = useCallback(async () => {
@@ -241,12 +212,10 @@ export default function ReviewScreen({ route, navigation }: Props) {
     setErrorMessage(null);
 
     try {
-      const extractResponse = await retryRequest(() =>
-        axios.post<SubmissionRecord>(
-          `${API_BASE_URL}/submissions/${submissionId}/extract`,
-          {},
-          { timeout: 45_000 }
-        )
+      const extractResponse = await axios.post<SubmissionRecord>(
+        `${API_BASE_URL}/submissions/${submissionId}/extract`,
+        {},
+        { timeout: 45_000 }
       );
 
       if (extractResponse.data.extraction_status === 'success' && extractResponse.data.extraction_result) {
@@ -262,12 +231,10 @@ export default function ReviewScreen({ route, navigation }: Props) {
         setFormGrandTotal(extData.total_marks_declared !== null ? String(extData.total_marks_declared) : '');
 
         try {
-          const valResponse = await retryRequest(() =>
-            axios.post<SubmissionRecord>(
-              `${API_BASE_URL}/submissions/${submissionId}/validate`,
-              {},
-              { timeout: 15_000 }
-            )
+          const valResponse = await axios.post<SubmissionRecord>(
+            `${API_BASE_URL}/submissions/${submissionId}/validate`,
+            {},
+            { timeout: 15_000 }
           );
           if (valResponse.data.validation_status === 'success' && valResponse.data.validation_result) {
             setValidationResult(valResponse.data.validation_result);
@@ -398,7 +365,7 @@ export default function ReviewScreen({ route, navigation }: Props) {
         };
 
         await axios.put(`${API_BASE_URL}/submissions/${submissionId}/extraction`, payload);
-        navigation.navigate('Capture', { sessionId });
+        navigation.navigate('Capture', { setId });
       } catch (err) {
         console.error('Save failed:', err);
         setErrorMessage('Failed to save booklet updates.');

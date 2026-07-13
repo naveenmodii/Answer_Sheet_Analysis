@@ -19,190 +19,148 @@ import { API_BASE_URL } from '../config';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/AppNavigator';
 
-
 type Props = NativeStackScreenProps<RootStackParamList, 'Dashboard'>;
 
-interface SessionMetadata {
-  sessionId: string;
+interface SetMetadata {
+  set_id: string;
   name: string;
-  createdAt: string;
-  rowCount: number;
-  localFilePath: string;
+  created_at: string;
+  status: string;
+  row_count: number;
 }
 
 export default function DashboardScreen({ navigation }: Props) {
-  const [sessions, setSessions] = useState<SessionMetadata[]>([]);
+  const [sets, setSets] = useState<SetMetadata[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // States for cross-platform rename modal dialog
-  const [renameModalVisible, setRenameModalVisible] = useState(false);
-  const [renameSessionId, setRenameSessionId] = useState<string | null>(null);
-  const [renameNameText, setRenameNameText] = useState('');
+  // States for cross-platform set creation modal
+  const [createModalVisible, setCreateModalVisible] = useState(false);
+  const [newSetName, setNewSetName] = useState('');
 
-  const sessionsFileUri = `${FileSystem.documentDirectory}sessions.json`;
-  const activeSessionFileUri = `${FileSystem.documentDirectory}active_session.json`;
+  const currentSetFileUri = `${FileSystem.documentDirectory}current_set.json`;
 
-  useEffect(() => {
-    const checkActiveSession = async () => {
-      try {
-        const info = await FileSystem.getInfoAsync(activeSessionFileUri);
-        if (info.exists) {
-          const content = await FileSystem.readAsStringAsync(activeSessionFileUri);
-          const { sessionId } = JSON.parse(content);
-          if (sessionId) {
-            // Verify session is active/exists on backend
-            try {
-              const res = await axios.get(
-                `${API_BASE_URL}/submissions/sessions/${sessionId}/status`
-              );
-              if (res.data) {
-                // Auto-resume scan session UI
-                navigation.navigate('Capture', { sessionId });
-              }
-            } catch (err) {
-              console.warn('Active session verification failed, clearing local file:', err);
-              await FileSystem.deleteAsync(activeSessionFileUri, { idempotent: true });
-            }
-          }
-        }
-      } catch (err) {
-        console.error('Failed to verify active session on launch:', err);
-      }
-    };
-    checkActiveSession();
-  }, [navigation]);
-
-  const loadSessions = useCallback(async () => {
+  const loadSets = useCallback(async () => {
     try {
       setLoading(true);
-      const info = await FileSystem.getInfoAsync(sessionsFileUri);
-      if (info.exists) {
-        const fileContent = await FileSystem.readAsStringAsync(sessionsFileUri);
-        const data = JSON.parse(fileContent);
-        if (Array.isArray(data)) {
-          setSessions(
-            data.sort(
-              (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-            )
-          );
-        }
-      } else {
-        setSessions([]);
-      }
+      const res = await axios.get<SetMetadata[]>(`${API_BASE_URL}/submissions/sets`);
+      setSets(res.data);
     } catch (err) {
-      console.error('Failed to load session library metadata:', err);
+      console.error('Failed to load sets metadata list:', err);
     } finally {
       setLoading(false);
     }
-  }, [sessionsFileUri]);
+  }, []);
 
   useFocusEffect(
     useCallback(() => {
-      loadSessions();
-    }, [loadSessions])
+      loadSets();
+    }, [loadSets])
   );
 
-  const handleCreateNewSession = async () => {
-    const sessionUuid =
-      Math.random().toString(36).substring(2, 11) +
-      '-' +
-      Math.random().toString(36).substring(2, 11);
-    try {
-      await FileSystem.writeAsStringAsync(
-        activeSessionFileUri,
-        JSON.stringify({ sessionId: sessionUuid })
-      );
-    } catch (err) {
-      console.warn('Failed to persist active session ID locally:', err);
-    }
-    navigation.navigate('Capture', { sessionId: sessionUuid });
+  const handleOpenCreateModal = () => {
+    const now = new Date();
+    const dateStr = now.toISOString().split('T')[0] ?? '';
+    const timeStr = now.toTimeString().split(' ')[0]?.substring(0, 5) ?? '';
+    setNewSetName(`Set ${dateStr} ${timeStr}`);
+    setCreateModalVisible(true);
   };
 
+  const handleConfirmCreateSet = async () => {
+    const finalName = newSetName.trim();
+    if (!finalName) return;
 
-  const handleShareSession = async (session: SessionMetadata) => {
-    let tempUri: string | null = null;
     try {
-      const fileInfo = await FileSystem.getInfoAsync(session.localFilePath);
-      if (!fileInfo.exists) {
-        Alert.alert('Spreadsheet Missing', 'The local Excel file for this session could not be found.');
-        return;
+      setCreateModalVisible(false);
+      setLoading(true);
+
+      const res = await axios.post<SetMetadata>(`${API_BASE_URL}/submissions/sets`, {
+        name: finalName,
+      });
+
+      const newSet = res.data;
+      
+      // Persist currently selected set ID locally as a UI convenience
+      try {
+        await FileSystem.writeAsStringAsync(
+          currentSetFileUri,
+          JSON.stringify({ setId: newSet.set_id })
+        );
+      } catch (storeErr) {
+        console.warn('Failed to save selected set ID locally:', storeErr);
       }
 
+      navigation.navigate('Capture', { setId: newSet.set_id });
+    } catch (err) {
+      console.error('Failed to create new set:', err);
+      Alert.alert('Error', 'Could not create a new scanning set.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSelectSet = async (setId: string) => {
+    try {
+      await FileSystem.writeAsStringAsync(
+        currentSetFileUri,
+        JSON.stringify({ setId })
+      );
+    } catch (storeErr) {
+      console.warn('Failed to save selected set ID locally:', storeErr);
+    }
+    navigation.navigate('Capture', { setId });
+  };
+
+  const handleShareSetSpreadsheet = async (set: SetMetadata) => {
+    let localUri: string | null = null;
+    let tempUri: string | null = null;
+    try {
       const isSharingAvailable = await Sharing.isAvailableAsync();
       if (!isSharingAvailable) {
         Alert.alert('Sharing Unavailable', 'Native sharing is not supported on this device.');
         return;
       }
 
-      const sanitizedName = session.name.replace(/[\/\\?%*:|"<>\s]+/g, '_');
+      setLoading(true);
+      localUri = `${FileSystem.documentDirectory}set_${set.set_id}.xlsx`;
+
+      const downloadResult = await FileSystem.downloadAsync(
+        `${API_BASE_URL}/submissions/sets/${set.set_id}/download`,
+        localUri
+      );
+
+      if (downloadResult.status !== 200) {
+        throw new Error('Server download returned status ' + downloadResult.status);
+      }
+
+      const sanitizedName = set.name.replace(/[\/\\?%*:|"<>\s]+/g, '_');
       tempUri = `${FileSystem.cacheDirectory}${sanitizedName}.xlsx`;
 
-      await FileSystem.copyAsync({ from: session.localFilePath, to: tempUri });
+      await FileSystem.copyAsync({ from: downloadResult.uri, to: tempUri });
 
       await Sharing.shareAsync(tempUri, {
         mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        dialogTitle: `Share marks for ${session.name}`,
+        dialogTitle: `Share spreadsheet for ${set.name}`,
         UTI: 'org.openxmlformats.spreadsheetml.sheet',
       });
     } catch (err) {
-      console.error('Failed to share session spreadsheet:', err);
-      Alert.alert('Share Error', 'Could not open native sharing options.');
+      console.error('Failed to share set spreadsheet:', err);
+      Alert.alert('Download Error', 'Could not download or share the set spreadsheet.');
     } finally {
+      setLoading(false);
       if (tempUri) {
         try {
           await FileSystem.deleteAsync(tempUri, { idempotent: true });
         } catch (cleanupErr) {
-          console.warn('Failed to clean up temporary share file:', cleanupErr);
+          console.warn(cleanupErr);
         }
       }
-    }
-  };
-
-  const handleDeleteSession = (session: SessionMetadata) => {
-    Alert.alert(
-      'Delete Session',
-      `Are you sure you want to delete "${session.name}"? The local spreadsheet file will be permanently removed.`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await FileSystem.deleteAsync(session.localFilePath, { idempotent: true });
-              const updated = sessions.filter((s) => s.sessionId !== session.sessionId);
-              await FileSystem.writeAsStringAsync(sessionsFileUri, JSON.stringify(updated));
-              setSessions(updated);
-            } catch (err) {
-              console.error('Delete session failed:', err);
-              Alert.alert('Error', 'Failed to delete session files.');
-            }
-          },
-        },
-      ]
-    );
-  };
-
-  const openRenameDialog = (session: SessionMetadata) => {
-    setRenameSessionId(session.sessionId);
-    setRenameNameText(session.name);
-    setRenameModalVisible(true);
-  };
-
-  const handleRenameConfirm = async () => {
-    if (!renameSessionId || !renameNameText.trim()) return;
-    try {
-      const updated = sessions.map((s) =>
-        s.sessionId === renameSessionId ? { ...s, name: renameNameText.trim() } : s
-      );
-      await FileSystem.writeAsStringAsync(sessionsFileUri, JSON.stringify(updated));
-      setSessions(updated);
-      setRenameModalVisible(false);
-      setRenameSessionId(null);
-      setRenameNameText('');
-    } catch (err) {
-      console.error('Rename session metadata failed:', err);
-      Alert.alert('Error', 'Failed to rename session record.');
+      if (localUri) {
+        try {
+          await FileSystem.deleteAsync(localUri, { idempotent: true });
+        } catch (cleanupErr) {
+          console.warn(cleanupErr);
+        }
+      }
     }
   };
 
@@ -225,122 +183,111 @@ export default function DashboardScreen({ navigation }: Props) {
         <Text style={styles.appSub}>Scan · Extract · Verify</Text>
       </View>
 
-      {/* Sessions List */}
+      {/* Sets List */}
       <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
-        <Text style={styles.sectionLabel}>SCAN BATCHES</Text>
+        <Text style={styles.sectionLabel}>SCAN SETS</Text>
 
-        {loading ? (
+        {loading && sets.length === 0 ? (
           <View style={styles.centerWrap}>
             <ActivityIndicator size="large" color={ACCENT} />
           </View>
-        ) : sessions.length === 0 ? (
+        ) : sets.length === 0 ? (
           /* Empty state */
           <View style={styles.emptyCard}>
             <Feather name="inbox" size={40} color={MUTED} />
-            <Text style={styles.emptyTitle}>No Scan Batches Yet</Text>
+            <Text style={styles.emptyTitle}>No Sets Created Yet</Text>
             <Text style={styles.emptyBody}>
-              Start a new session to photograph student booklets and compile a consolidated marks sheet.
+              Create a new named set to photograph booklets and append marks to its spreadsheet.
             </Text>
             <Pressable
               style={({ pressed }) => [styles.primaryBtn, pressed && styles.btnPressed]}
-              onPress={handleCreateNewSession}
+              onPress={handleOpenCreateModal}
             >
               <Feather name="plus" size={16} color="#fff" style={styles.btnIcon} />
-              <Text style={styles.primaryBtnText}>New Scan Session</Text>
+              <Text style={styles.primaryBtnText}>New Scan Set</Text>
             </Pressable>
           </View>
         ) : (
-          sessions.map((session) => (
-            <View key={session.sessionId} style={styles.sessionCard}>
-              <View style={styles.cardTop}>
+          sets.map((item) => (
+            <View key={item.set_id} style={styles.sessionCard}>
+              <Pressable
+                style={styles.cardTop}
+                onPress={() => handleSelectSet(item.set_id)}
+              >
                 <View style={styles.metaCol}>
                   <Text style={styles.sessionName} numberOfLines={1}>
-                    {session.name}
+                    {item.name}
                   </Text>
-                  <Text style={styles.sessionDate}>{formatDate(session.createdAt)}</Text>
+                  <Text style={styles.sessionDate}>{formatDate(item.created_at)}</Text>
                 </View>
                 <View style={styles.badge}>
                   <Text style={styles.badgeText}>
-                    {session.rowCount} {session.rowCount === 1 ? 'booklet' : 'booklets'}
+                    {item.row_count} {item.row_count === 1 ? 'row' : 'rows'}
                   </Text>
                 </View>
-              </View>
+              </Pressable>
 
               <View style={styles.divider} />
 
-              {/* Card actions */}
+              {/* Share/Download spreadsheet */}
               <View style={styles.actionRow}>
                 <Pressable
                   style={({ pressed }) => [styles.actionBtn, styles.shareBtn, pressed && styles.btnPressed]}
-                  onPress={() => handleShareSession(session)}
-                  accessibilityLabel={`Share session ${session.name}`}
+                  onPress={() => handleShareSetSpreadsheet(item)}
+                  accessibilityLabel={`Download spreadsheet for ${item.name}`}
                 >
                   <Feather name="share-2" size={14} color="#fff" style={styles.btnIcon} />
-                  <Text style={styles.shareBtnText}>Share</Text>
-                </Pressable>
-
-                <Pressable
-                  style={({ pressed }) => [styles.actionBtn, styles.editBtn, pressed && styles.btnPressed]}
-                  onPress={() => openRenameDialog(session)}
-                  accessibilityLabel={`Rename session ${session.name}`}
-                >
-                  <Feather name="edit-2" size={14} color={TEXT_MUTED} style={styles.btnIcon} />
-                  <Text style={styles.editBtnText}>Rename</Text>
-                </Pressable>
-
-                <Pressable
-                  style={({ pressed }) => [styles.actionBtn, styles.deleteBtn, pressed && styles.btnPressed]}
-                  onPress={() => handleDeleteSession(session)}
-                  accessibilityLabel={`Delete session ${session.name}`}
-                >
-                  <Feather name="trash-2" size={14} color={DANGER_TEXT} />
+                  <Text style={styles.shareBtnText}>Download & Share</Text>
                 </Pressable>
               </View>
             </View>
           ))
         )}
 
-        {sessions.length > 0 && (
+        {sets.length > 0 && (
           <Pressable
             style={({ pressed }) => [styles.primaryBtn, styles.fabBtn, pressed && styles.btnPressed]}
-            onPress={handleCreateNewSession}
+            onPress={handleOpenCreateModal}
           >
             <Feather name="plus" size={16} color="#fff" style={styles.btnIcon} />
-            <Text style={styles.primaryBtnText}>New Scan Session</Text>
+            <Text style={styles.primaryBtnText}>New Scan Set</Text>
           </Pressable>
         )}
       </ScrollView>
 
-      {/* Rename Modal */}
+      {/* Create Set Modal */}
       <Modal
-        visible={renameModalVisible}
+        visible={createModalVisible}
         transparent={true}
         animationType="fade"
-        onRequestClose={() => setRenameModalVisible(false)}
+        onRequestClose={() => setCreateModalVisible(false)}
       >
         <View style={styles.modalBg}>
           <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Rename Session</Text>
+            <Text style={styles.modalTitle}>New Scan Set</Text>
+            <Text style={styles.modalDesc}>
+              Enter a name for this scanning set. All booklets scanned in this set will be appended as rows in its Excel spreadsheet.
+            </Text>
             <TextInput
               style={styles.modalInput}
-              value={renameNameText}
-              onChangeText={setRenameNameText}
-              placeholder="Session name"
+              value={newSetName}
+              onChangeText={setNewSetName}
+              placeholder="e.g. Computer Science CS-101"
               placeholderTextColor={MUTED}
               maxLength={40}
             />
             <View style={styles.modalButtons}>
               <Pressable
                 style={[styles.modalBtn, styles.modalCancelBtn]}
-                onPress={() => setRenameModalVisible(false)}
+                onPress={() => setCreateModalVisible(false)}
               >
                 <Text style={styles.modalCancelText}>Cancel</Text>
               </Pressable>
               <Pressable
                 style={[styles.modalBtn, styles.modalSaveBtn]}
-                onPress={handleRenameConfirm}
+                onPress={handleConfirmCreateSet}
               >
-                <Text style={styles.modalSaveText}>Save</Text>
+                <Text style={styles.modalSaveText}>Create Set</Text>
               </Pressable>
             </View>
           </View>
@@ -358,13 +305,10 @@ const ACCENT    = '#5f5af6';
 const TEXT      = '#e8e8f0';
 const TEXT_MUTED = '#7a7a8c';
 const MUTED     = '#4a4a5a';
-const SUCCESS_TEXT  = '#34d399';
-const DANGER_TEXT   = '#f87171';
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: BG },
 
-  // ── Header ──────────────────────────────────────────────────────────────────
   header: {
     paddingTop: 60,
     paddingBottom: 20,
@@ -386,7 +330,6 @@ const styles = StyleSheet.create({
     letterSpacing: 0.2,
   },
 
-  // ── List ────────────────────────────────────────────────────────────────────
   scroll: { flex: 1 },
   scrollContent: { padding: 20, paddingBottom: 56, gap: 12 },
 
@@ -400,7 +343,6 @@ const styles = StyleSheet.create({
 
   centerWrap: { paddingVertical: 64, alignItems: 'center' },
 
-  // ── Empty state ─────────────────────────────────────────────────────────────
   emptyCard: {
     backgroundColor: SURFACE,
     borderWidth: 1,
@@ -420,7 +362,6 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
 
-  // ── Session card ────────────────────────────────────────────────────────────
   sessionCard: {
     backgroundColor: SURFACE,
     borderWidth: 1,
@@ -449,7 +390,6 @@ const styles = StyleSheet.create({
   badgeText: { color: ACCENT, fontSize: 12, fontWeight: '600' },
   divider: { height: 1, backgroundColor: BORDER },
 
-  // ── Action buttons ──────────────────────────────────────────────────────────
   actionRow: { flexDirection: 'row', gap: 8 },
   actionBtn: {
     flexDirection: 'row',
@@ -459,23 +399,9 @@ const styles = StyleSheet.create({
     borderRadius: 9,
   },
   btnIcon: { marginRight: 5 },
-  shareBtn: { flex: 2, backgroundColor: ACCENT },
+  shareBtn: { flex: 1, backgroundColor: ACCENT },
   shareBtnText: { color: '#fff', fontSize: 13, fontWeight: '600' },
-  editBtn: {
-    flex: 1.5,
-    backgroundColor: 'transparent',
-    borderWidth: 1,
-    borderColor: BORDER,
-  },
-  editBtnText: { color: TEXT_MUTED, fontSize: 13, fontWeight: '500' },
-  deleteBtn: {
-    width: 40,
-    backgroundColor: `${DANGER_TEXT}10`,
-    borderWidth: 1,
-    borderColor: `${DANGER_TEXT}25`,
-  },
 
-  // ── Primary button ──────────────────────────────────────────────────────────
   primaryBtn: {
     flexDirection: 'row',
     backgroundColor: ACCENT,
@@ -490,7 +416,6 @@ const styles = StyleSheet.create({
   fabBtn: { marginTop: 8 },
   btnPressed: { opacity: 0.82, transform: [{ scale: 0.98 }] },
 
-  // ── Modal ────────────────────────────────────────────────────────────────────
   modalBg: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.6)',
@@ -508,6 +433,7 @@ const styles = StyleSheet.create({
     gap: 16,
   },
   modalTitle: { fontSize: 17, fontWeight: '700', color: TEXT, textAlign: 'center' },
+  modalDesc: { fontSize: 13, color: TEXT_MUTED, textAlign: 'center', lineHeight: 18 },
   modalInput: {
     backgroundColor: '#0f0f14',
     borderWidth: 1,

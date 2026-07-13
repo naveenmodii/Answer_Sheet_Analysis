@@ -1,5 +1,5 @@
 """
-SQLite Database utility layer — Phase 7.
+SQLite Database utility layer — Durable Sets.
 """
 import os
 import json
@@ -19,10 +19,19 @@ def init_db():
     conn = sqlite3.connect(str(DB_FILE))
     cursor = conn.cursor()
 
-    # Create sessions table
+    # Drop old session tables if they exist to perform clean migration to Sets
+    cursor.execute("DROP TABLE IF EXISTS sessions")
+    
+    # Check if submissions has the old schema (has session_id instead of set_id)
+    cursor.execute("PRAGMA table_info(submissions)")
+    cols = [col[1] for col in cursor.fetchall()]
+    if cols and "session_id" in cols:
+        cursor.execute("DROP TABLE IF EXISTS submissions")
+
+    # Create sets table
     cursor.execute("""
-        CREATE TABLE IF NOT EXISTS sessions (
-            session_id TEXT PRIMARY KEY,
+        CREATE TABLE IF NOT EXISTS sets (
+            set_id TEXT PRIMARY KEY,
             created_at TEXT NOT NULL,
             name TEXT,
             status TEXT NOT NULL
@@ -33,7 +42,7 @@ def init_db():
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS submissions (
             submission_id TEXT PRIMARY KEY,
-            session_id TEXT,
+            set_id TEXT,
             original_filename TEXT NOT NULL,
             saved_path TEXT NOT NULL,
             content_type TEXT NOT NULL,
@@ -53,7 +62,7 @@ def init_db():
             roi_y REAL,
             roi_w REAL,
             roi_h REAL,
-            FOREIGN KEY (session_id) REFERENCES sessions (session_id)
+            FOREIGN KEY (set_id) REFERENCES sets (set_id)
         )
     """)
 
@@ -68,25 +77,53 @@ def get_db_connection():
     return conn
 
 
-def create_session_if_absent(session_id: str, name: Optional[str] = None):
-    """Inserts a new session record if session_id is not already registered."""
+def create_set(set_id: str, name: Optional[str] = None):
+    """Inserts a new set record if set_id is not already registered."""
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT 1 FROM sessions WHERE session_id = ?", (session_id,))
+    cursor.execute("SELECT 1 FROM sets WHERE set_id = ?", (set_id,))
     if not cursor.fetchone():
         created_at = datetime.now(timezone.utc).isoformat()
         cursor.execute(
-            "INSERT INTO sessions (session_id, created_at, name, status) VALUES (?, ?, ?, ?)",
-            (session_id, created_at, name, "active"),
+            "INSERT INTO sets (set_id, created_at, name, status) VALUES (?, ?, ?, ?)",
+            (set_id, created_at, name or f"Set {created_at[:10]}", "active"),
         )
         conn.commit()
     conn.close()
 
 
-def save_submission(record: SubmissionRecord, session_id: str):
+def get_set(set_id: str) -> Optional[dict]:
+    """Retrieves set details by set_id."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM sets WHERE set_id = ?", (set_id,))
+    row = cursor.fetchone()
+    conn.close()
+    if row:
+        return dict(row)
+    return None
+
+
+def list_sets() -> List[dict]:
+    """Lists all sets, sorted by created_at DESC, including row count of confirmed submissions."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT s.set_id, s.name, s.created_at, s.status,
+               (SELECT COUNT(*) FROM submissions sub 
+                WHERE sub.set_id = s.set_id AND sub.review_status = 'confirmed') as row_count
+        FROM sets s
+        ORDER BY s.created_at DESC
+    """)
+    rows = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return rows
+
+
+def save_submission(record: SubmissionRecord, set_id: str):
     """Inserts or overwrites a SubmissionRecord in the submissions database table."""
-    # Ensure session exists first
-    create_session_if_absent(session_id)
+    # Ensure set exists first
+    create_set(set_id)
 
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -105,7 +142,7 @@ def save_submission(record: SubmissionRecord, session_id: str):
     cursor.execute(
         """
         INSERT OR REPLACE INTO submissions (
-            submission_id, session_id, original_filename, saved_path, content_type,
+            submission_id, set_id, original_filename, saved_path, content_type,
             upload_timestamp, status, preprocessing_status, processed_image_path,
             preprocessing_debug_reason, extraction_status, extraction_result,
             extraction_error, validation_status, validation_result, review_status,
@@ -114,7 +151,7 @@ def save_submission(record: SubmissionRecord, session_id: str):
         """,
         (
             record.submission_id,
-            session_id,
+            set_id,
             record.original_filename,
             record.saved_path,
             record.content_type,
@@ -151,7 +188,6 @@ def get_submission(submission_id: str) -> Optional[SubmissionRecord]:
     if not row:
         return None
 
-    # Reconstruct schemas
     ext_data = None
     if row["extraction_result"]:
         ext_data = ExtractionResult(**json.loads(row["extraction_result"]))
@@ -184,17 +220,17 @@ def get_submission(submission_id: str) -> Optional[SubmissionRecord]:
     )
 
 
-def get_session_submissions(session_id: str, confirmed_only: bool = False) -> List[SubmissionRecord]:
-    """Loads all submissions associated with the active session."""
+def get_set_submissions(set_id: str, confirmed_only: bool = False) -> List[SubmissionRecord]:
+    """Loads all submissions associated with the specified set."""
     conn = get_db_connection()
     cursor = conn.cursor()
     if confirmed_only:
         cursor.execute(
-            "SELECT * FROM submissions WHERE session_id = ? AND review_status = 'confirmed'",
-            (session_id,),
+            "SELECT * FROM submissions WHERE set_id = ? AND review_status = 'confirmed'",
+            (set_id,),
         )
     else:
-        cursor.execute("SELECT * FROM submissions WHERE session_id = ?", (session_id,))
+        cursor.execute("SELECT * FROM submissions WHERE set_id = ?", (set_id,))
 
     rows = cursor.fetchall()
     conn.close()
@@ -236,27 +272,14 @@ def get_session_submissions(session_id: str, confirmed_only: bool = False) -> Li
     return records
 
 
-def get_confirmed_count(session_id: str) -> int:
-    """Returns the count of reviewed/confirmed booklets in this session."""
+def get_set_confirmed_count(set_id: str) -> int:
+    """Returns the count of reviewed/confirmed booklets in this set."""
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT COUNT(*) FROM submissions WHERE session_id = ? AND review_status = 'confirmed'",
-        (session_id,),
+        "SELECT COUNT(*) FROM submissions WHERE set_id = ? AND review_status = 'confirmed'",
+        (set_id,),
     )
     count = cursor.fetchone()[0]
     conn.close()
     return count
-
-
-def get_session(session_id: str) -> Optional[dict]:
-    """Retrieves session details by session_id."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM sessions WHERE session_id = ?", (session_id,))
-    row = cursor.fetchone()
-    conn.close()
-    if row:
-        return dict(row)
-    return None
-

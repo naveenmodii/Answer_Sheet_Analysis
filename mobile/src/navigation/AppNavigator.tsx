@@ -9,10 +9,10 @@ import DashboardScreen from '../screens/DashboardScreen';
 // ─── Route param types ───────────────────────────────────────────────────────
 export type RootStackParamList = {
   Dashboard: undefined;
-  Capture: { sessionId: string };
+  Capture: { setId: string };
   Review: {
     imageUri: string;
-    sessionId: string;
+    setId: string;
   };
 };
 

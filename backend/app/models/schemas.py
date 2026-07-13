@@ -138,3 +138,22 @@ class SubmissionResponse(BaseModel):
     submission_id: str
     status: str
 
+
+# ---------------------------------------------------------------------------
+# Set models
+# ---------------------------------------------------------------------------
+
+class SetCreateRequest(BaseModel):
+    """Payload for creating a new named scan set."""
+    name: Optional[str] = None
+
+
+class SetResponse(BaseModel):
+    """Details of a scan set, including confirmed row count."""
+    set_id: str
+    name: str
+    created_at: str
+    status: str
+    row_count: int
+
+

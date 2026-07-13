@@ -1,8 +1,7 @@
 """
-Excel Export Service — Phase 6
+Excel Export Service — Durable Sets.
 
-Uses openpyxl to append confirmed student grades and marks details
-into a single consolidated 'exports/marks.xlsx' spreadsheet.
+Appends confirmed booklet rows directly to the set's spreadsheet file exports/{set_id}.xlsx.
 """
 import os
 from pathlib import Path
@@ -10,19 +9,18 @@ from openpyxl import Workbook, load_workbook
 from app.models.schemas import SubmissionRecord
 
 EXPORT_DIR = Path(__file__).parent.parent.parent / "exports"
-EXPORT_FILE = EXPORT_DIR / "marks.xlsx"
 
 
-def append_submission_to_excel(record: SubmissionRecord) -> str:
+def append_row_to_set_excel(set_id: str, record: SubmissionRecord) -> str:
     """
-    Appends one row representing the confirmed student grades to the marks.xlsx spreadsheet.
-    Creates the workbook with correct column headers if it doesn't already exist.
+    Appends one row representing the confirmed student grades to exports/{set_id}.xlsx.
+    Creates the workbook with headers if it doesn't already exist.
     """
     if not record.extraction_result:
         raise ValueError("Cannot export submission: extraction_result is empty.")
 
-    # Create exports directory if it doesn't exist
     EXPORT_DIR.mkdir(parents=True, exist_ok=True)
+    set_file = EXPORT_DIR / f"{set_id}.xlsx"
 
     headers = [
         "Name",
@@ -36,13 +34,13 @@ def append_submission_to_excel(record: SubmissionRecord) -> str:
     ]
 
     # Load or create workbook
-    if not EXPORT_FILE.exists():
+    if not set_file.exists():
         wb = Workbook()
         ws = wb.active
         ws.title = "Marks Records"
         ws.append(headers)
     else:
-        wb = load_workbook(EXPORT_FILE)
+        wb = load_workbook(set_file)
         ws = wb.active
 
     # Format the Marks Breakdown string (e.g. "1a-5, 1b-5, 2a-4")
@@ -71,58 +69,5 @@ def append_submission_to_excel(record: SubmissionRecord) -> str:
 
     # Append and save
     ws.append(row_data)
-    wb.save(EXPORT_FILE)
-    return str(EXPORT_FILE)
-
-
-def compile_session_to_excel(session_id: str, records: list[SubmissionRecord]) -> str:
-    """
-    Creates a new spreadsheet for the active session, appending all confirmed records.
-    Saves the spreadsheet at exports/{session_id}.xlsx and returns the file path.
-    """
-    EXPORT_DIR.mkdir(parents=True, exist_ok=True)
-    session_file = EXPORT_DIR / f"{session_id}.xlsx"
-
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Consolidated Session Marks"
-
-    headers = [
-        "Name",
-        "Roll No",
-        "Branch",
-        "Subject",
-        "Date",
-        "Marks Breakdown",
-        "Total Marks",
-        "Validation Status",
-    ]
-    ws.append(headers)
-
-    for record in records:
-        if not record.extraction_result:
-            continue
-        ext = record.extraction_result
-        marks_str = ", ".join(
-            f"{entry.question_no}{entry.part}-{entry.marks}"
-            for entry in sorted(ext.marks_entries, key=lambda x: (x.question_no, x.part))
-        )
-
-        val_status = "Discrepancy noted"
-        if record.validation_result and record.validation_result.overall_status == "valid":
-            val_status = "Valid"
-
-        row_data = [
-            ext.name,
-            ext.roll_no,
-            ext.branch,
-            ext.subject,
-            ext.date,
-            marks_str,
-            ext.total_marks_declared,
-            val_status,
-        ]
-        ws.append(row_data)
-
-    wb.save(session_file)
-    return str(session_file)
+    wb.save(set_file)
+    return str(set_file)

@@ -1,13 +1,8 @@
 /**
- * CaptureScreen — Phase 1
+ * CaptureScreen — Sets Architecture
  *
  * Shows a full-screen live camera preview via react-native-vision-camera v5.
- *
- * VisionCamera v5 API (Nitro Modules architecture):
- *   - usePhotoOutput() → creates a CameraPhotoOutput
- *   - outputs={[photoOutput]} prop on <Camera> (replaces photo={true})
- *   - photoOutput.capturePhoto({ flashMode }) → takes the photo
- *   - camera ref does NOT have takePhoto() in v5
+ * Captures booklet cover images and navigates to ReviewScreen.
  */
 import React, { useCallback, useEffect, useState } from 'react';
 import {
@@ -19,13 +14,9 @@ import {
   Text,
   View,
   Alert,
-  Modal,
-  TextInput,
 } from 'react-native';
 import Feather from '@expo/vector-icons/Feather';
 import { useFocusEffect } from '@react-navigation/native';
-import * as FileSystem from 'expo-file-system/legacy';
-import * as Sharing from 'expo-sharing';
 import { API_BASE_URL } from '../config';
 import {
   Camera,
@@ -56,19 +47,16 @@ const MUTED        = '#4a4a5a';
 const TEXT_BODY    = '#d0d0e0';
 
 export default function CaptureScreen({ route, navigation }: Props) {
-  const { sessionId } = route.params;
+  const { setId } = route.params;
   const { hasPermission, requestPermission } = useCameraPermission();
   const device = useCameraDevice('back');
 
   const photoOutput = usePhotoOutput({ qualityPrioritization: 'quality' });
 
   const [capturing, setCapturing] = useState(false);
-
-  // ── Phase 7 Session Tracking States ──────────────────────────────────────
+  const [setName, setSetName] = useState('Active Set');
   const [confirmedCount, setConfirmedCount] = useState(0);
-  const [finishModalVisible, setFinishModalVisible] = useState(false);
-  const [sessionNameText, setSessionNameText] = useState('');
-  const [compiling, setCompiling] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     if (!hasPermission) {
@@ -76,92 +64,47 @@ export default function CaptureScreen({ route, navigation }: Props) {
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Enforce selected Set presence and fetch name/count on focus
   useFocusEffect(
     useCallback(() => {
+      if (!setId) {
+        Alert.alert(
+          'No Set Selected',
+          'Please select or create a scanning set from the dashboard before scanning booklet covers.',
+          [{ text: 'OK', onPress: () => navigation.popToTop() }]
+        );
+        return;
+      }
+
       let isActive = true;
-      const fetchCount = async () => {
+      const fetchSetStatus = async () => {
         try {
-          const response = await axios.get<{ confirmed_count: number }>(
-            `${API_BASE_URL}/submissions/sessions/${sessionId}/submissions/count`
+          setLoading(true);
+          const response = await axios.get<{ name: string; confirmed_count: number }>(
+            `${API_BASE_URL}/submissions/sets/${setId}/status`
           );
-          if (isActive) setConfirmedCount(response.data.confirmed_count);
+          if (isActive) {
+            setSetName(response.data.name);
+            setConfirmedCount(response.data.confirmed_count);
+          }
         } catch (err) {
-          console.warn('Failed to query session submissions count:', err);
+          console.warn('Failed to query set status details:', err);
+          if (isActive) {
+            Alert.alert(
+              'Set Not Found',
+              'The selected scanning set could not be verified on the server.',
+              [{ text: 'Return to Dashboard', onPress: () => navigation.popToTop() }]
+            );
+          }
+        } finally {
+          if (isActive) setLoading(false);
         }
       };
-      fetchCount();
+
+      fetchSetStatus();
       return () => { isActive = false; };
-    }, [sessionId])
+    }, [setId, navigation])
   );
-
-  const handleFinishSession = () => {
-    if (confirmedCount === 0) {
-      Alert.alert(
-        'Empty Session',
-        'No student booklets were confirmed in this session. Return to Dashboard?',
-        [
-          { text: 'Cancel', style: 'cancel' },
-          { text: 'Yes, Exit', onPress: () => navigation.popToTop() },
-        ]
-      );
-      return;
-    }
-    const now = new Date();
-    const dateStr = now.toISOString().split('T')[0] ?? '';
-    const timeStr = now.toTimeString().split(' ')[0]?.substring(0, 5) ?? '';
-    setSessionNameText(`Scan Session ${dateStr} ${timeStr}`);
-    setFinishModalVisible(true);
-  };
-
-  const handleConfirmFinish = async () => {
-    if (!sessionNameText.trim()) return;
-    try {
-      setCompiling(true);
-      setFinishModalVisible(false);
-
-      const localFilePath = `${FileSystem.documentDirectory}session_${sessionId}.xlsx`;
-      const downloadResult = await FileSystem.downloadAsync(
-        `${API_BASE_URL}/submissions/sessions/${sessionId}/compile`,
-        localFilePath
-      );
-      if (downloadResult.status !== 200) {
-        throw new Error('Server compile returned status ' + downloadResult.status);
-      }
-
-      const sessionsFileUri = `${FileSystem.documentDirectory}sessions.json`;
-      let sessionLibrary: any[] = [];
-      const info = await FileSystem.getInfoAsync(sessionsFileUri);
-      if (info.exists) {
-        const content = await FileSystem.readAsStringAsync(sessionsFileUri);
-        sessionLibrary = JSON.parse(content);
-      }
-      sessionLibrary.push({
-        sessionId,
-        name: sessionNameText.trim(),
-        createdAt: new Date().toISOString(),
-        rowCount: confirmedCount,
-        localFilePath,
-      });
-      await FileSystem.writeAsStringAsync(sessionsFileUri, JSON.stringify(sessionLibrary));
-      
-      try {
-        const activeSessionUri = `${FileSystem.documentDirectory}active_session.json`;
-        await FileSystem.deleteAsync(activeSessionUri, { idempotent: true });
-      } catch (err) {
-        console.warn('Failed to clear active session file:', err);
-      }
-
-      navigation.popToTop();
-    } catch (err) {
-      console.error('Session export compilation failed:', err);
-      Alert.alert(
-        'Compilation Failed',
-        'Failed to compile or download session Excel spreadsheet. Please make sure your server is running.'
-      );
-    } finally {
-      setCompiling(false);
-    }
-  };
 
   // ── Capture handler (v5 API) ──────────────────────────────────────────────
   const handleCapture = useCallback(async () => {
@@ -216,13 +159,13 @@ export default function CaptureScreen({ route, navigation }: Props) {
         { compress: 0.9, format: ImageManipulator.SaveFormat.JPEG }
       );
 
-      navigation.navigate('Review', { imageUri: cropResult.uri, sessionId });
+      navigation.navigate('Review', { imageUri: cropResult.uri, setId });
     } catch (err) {
       console.error('Capture failed:', err);
     } finally {
       setCapturing(false);
     }
-  }, [capturing, photoOutput, navigation, sessionId]);
+  }, [capturing, photoOutput, navigation, setId]);
 
   // ── Permission denied ────────────────────────────────────────────────────
   if (!hasPermission) {
@@ -245,11 +188,11 @@ export default function CaptureScreen({ route, navigation }: Props) {
     );
   }
 
-  if (!device) {
+  if (!device || loading) {
     return (
       <View style={styles.centeredContainer}>
         <ActivityIndicator size="large" color={ACCENT} />
-        <Text style={styles.loadingText}>Initialising camera…</Text>
+        <Text style={styles.loadingText}>Initialising scan set…</Text>
       </View>
     );
   }
@@ -267,50 +210,22 @@ export default function CaptureScreen({ route, navigation }: Props) {
       <View style={styles.topHeader}>
         <Pressable
           style={({ pressed }) => [styles.headerBackBtn, pressed && styles.buttonPressed]}
-          onPress={() => {
-            const clearActiveSessionAndGoBack = async () => {
-              try {
-                const activeSessionUri = `${FileSystem.documentDirectory}active_session.json`;
-                await FileSystem.deleteAsync(activeSessionUri, { idempotent: true });
-              } catch (err) {
-                console.warn('Failed to clear active session file:', err);
-              }
-              navigation.popToTop();
-            };
-
-            if (confirmedCount > 0) {
-              Alert.alert(
-                'Exit Scan Session',
-                'You have scanned booklets in this active batch. Exit and discard them?',
-                [
-                  { text: 'Cancel', style: 'cancel' },
-                  { text: 'Exit & Discard', style: 'destructive', onPress: clearActiveSessionAndGoBack },
-                ]
-              );
-            } else {
-              clearActiveSessionAndGoBack();
-            }
-          }}
-          accessibilityLabel="Back to Dashboard library"
+          onPress={() => navigation.popToTop()}
+          accessibilityLabel="Back to Dashboard sets"
         >
           <Feather name="arrow-left" size={14} color={ACCENT_LIGHT} />
           <Text style={styles.headerBackText}>Dashboard</Text>
         </Pressable>
 
         <View style={styles.headerTitleWrap}>
-          <Text style={styles.headerTitle}>Active scan</Text>
+          <Text style={styles.headerTitle} numberOfLines={1}>{setName}</Text>
           <Text style={styles.headerSub}>
-            {confirmedCount === 0 ? '0 booklets' : `${confirmedCount} booklet${confirmedCount === 1 ? '' : 's'} saved`}
+            {confirmedCount === 0 ? '0 rows' : `${confirmedCount} row${confirmedCount === 1 ? '' : 's'} saved`}
           </Text>
         </View>
 
-        <Pressable
-          style={({ pressed }) => [styles.headerFinishBtn, pressed && styles.buttonPressed]}
-          onPress={handleFinishSession}
-          accessibilityLabel="Finish active scanning batch"
-        >
-          <Text style={styles.headerFinishText}>Finish</Text>
-        </Pressable>
+        {/* Empty placeholder to balance the header layout */}
+        <View style={{ width: 80 }} />
       </View>
 
       {/* Dark vignette overlay */}
@@ -339,7 +254,7 @@ export default function CaptureScreen({ route, navigation }: Props) {
         <Pressable
           style={({ pressed }) => [styles.shutterOuter, pressed && styles.shutterOuterPressed]}
           onPress={handleCapture}
-          disabled={capturing || compiling}
+          disabled={capturing}
           accessibilityLabel="Take photo"
         >
           {capturing ? (
@@ -349,53 +264,6 @@ export default function CaptureScreen({ route, navigation }: Props) {
           )}
         </Pressable>
       </View>
-
-      {/* Session Name Modal */}
-      <Modal
-        visible={finishModalVisible}
-        transparent={true}
-        animationType="fade"
-        onRequestClose={() => setFinishModalVisible(false)}
-      >
-        <View style={styles.modalBg}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Name Scan Batch</Text>
-            <Text style={styles.modalDesc}>
-              Assign a name to this scanned batch before compiling the consolidated Excel marks sheet.
-            </Text>
-            <TextInput
-              style={styles.modalInput}
-              value={sessionNameText}
-              onChangeText={setSessionNameText}
-              placeholder="e.g. Maths Test Section A"
-              placeholderTextColor={MUTED}
-              maxLength={40}
-            />
-            <View style={styles.modalButtons}>
-              <Pressable
-                style={[styles.modalBtn, styles.modalCancelBtn]}
-                onPress={() => setFinishModalVisible(false)}
-              >
-                <Text style={styles.modalCancelText}>Cancel</Text>
-              </Pressable>
-              <Pressable
-                style={[styles.modalBtn, styles.modalSaveBtn]}
-                onPress={handleConfirmFinish}
-              >
-                <Text style={styles.modalSaveText}>Compile & Finish</Text>
-              </Pressable>
-            </View>
-          </View>
-        </View>
-      </Modal>
-
-      {/* Compilation Spinner Overlay */}
-      {compiling && (
-        <View style={styles.compilingOverlay}>
-          <ActivityIndicator size="large" color={ACCENT} />
-          <Text style={styles.compilingText}>Compiling Excel spreadsheet…</Text>
-        </View>
-      )}
     </View>
   );
 }
@@ -407,7 +275,6 @@ const OVERLAY_VERT = (SCREEN_H - GUIDE_H) / 2;
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: '#000' },
 
-  // ── Permission / loading screens ──────────────────────────────────────────
   centeredContainer: {
     flex: 1,
     backgroundColor: '#0b0b0e',
@@ -438,14 +305,12 @@ const styles = StyleSheet.create({
   settingsButtonText: { color: '#fff', fontSize: 15, fontWeight: '600' },
   loadingText: { color: TEXT_BODY, marginTop: 16, fontSize: 14 },
 
-  // ── Overlay vignette ──────────────────────────────────────────────────────
   overlay: { ...StyleSheet.absoluteFillObject, flexDirection: 'column' },
   overlayTop: { height: OVERLAY_VERT, backgroundColor: 'rgba(0,0,0,0.55)' },
   overlayMiddle: { height: GUIDE_H, flexDirection: 'row' },
   overlaySide: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)' },
   overlayBottom: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)' },
 
-  // ── A4 guide rectangle ────────────────────────────────────────────────────
   guide: {
     width: GUIDE_W,
     height: GUIDE_H,
@@ -464,11 +329,9 @@ const styles = StyleSheet.create({
   cornerBL: { bottom: -CORNER_THICKNESS / 2, left: -CORNER_THICKNESS / 2, borderBottomWidth: CORNER_THICKNESS, borderLeftWidth: CORNER_THICKNESS },
   cornerBR: { bottom: -CORNER_THICKNESS / 2, right: -CORNER_THICKNESS / 2, borderBottomWidth: CORNER_THICKNESS, borderRightWidth: CORNER_THICKNESS },
 
-  // ── Hint text ─────────────────────────────────────────────────────────────
   hintContainer: { position: 'absolute', top: OVERLAY_VERT - 36, left: 0, right: 0, alignItems: 'center' },
   hintText: { color: 'rgba(200,200,255,0.85)', fontSize: 13, letterSpacing: 0.3 },
 
-  // ── Shutter button ────────────────────────────────────────────────────────
   shutterContainer: { position: 'absolute', bottom: 48, left: 0, right: 0, alignItems: 'center' },
   shutterOuter: {
     width: 72,
@@ -483,7 +346,6 @@ const styles = StyleSheet.create({
   shutterOuterPressed: { transform: [{ scale: 0.94 }], backgroundColor: 'rgba(200,200,255,0.9)' },
   shutterInner: { width: 52, height: 52, borderRadius: 26, backgroundColor: '#fff' },
 
-  // ── Session header ────────────────────────────────────────────────────────
   topHeader: {
     position: 'absolute',
     top: 50,
@@ -506,68 +368,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 8,
     borderRadius: 20,
+    width: 100,
   },
   headerBackText: { color: ACCENT_LIGHT, fontSize: 12, fontWeight: '600' },
-  headerTitleWrap: { alignItems: 'center' },
-  headerTitle: { color: '#fff', fontSize: 13, fontWeight: '700', letterSpacing: 0.5 },
+  headerTitleWrap: { alignItems: 'center', flex: 1 },
+  headerTitle: { color: '#fff', fontSize: 13, fontWeight: '700', letterSpacing: 0.5, maxWidth: 160, textAlign: 'center' },
   headerSub: { color: 'rgba(200,200,255,0.6)', fontSize: 11, fontWeight: '500', marginTop: 2 },
-  headerFinishBtn: {
-    backgroundColor: ACCENT,
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 3,
-    elevation: 4,
-  },
-  headerFinishText: { color: '#fff', fontSize: 12, fontWeight: '700' },
   buttonPressed: { opacity: 0.82, transform: [{ scale: 0.96 }] },
-
-  // ── Modal ─────────────────────────────────────────────────────────────────
-  modalBg: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.65)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 24,
-  },
-  modalContent: {
-    width: '100%',
-    backgroundColor: '#18181f',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.08)',
-    borderRadius: 18,
-    padding: 20,
-    gap: 16,
-  },
-  modalTitle: { fontSize: 17, fontWeight: '700', color: '#e8e8f0', textAlign: 'center' },
-  modalDesc: { fontSize: 13, color: '#7a7a8c', textAlign: 'center', lineHeight: 18 },
-  modalInput: {
-    backgroundColor: '#0f0f14',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.08)',
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 11,
-    color: '#e8e8f0',
-    fontSize: 14,
-  },
-  modalButtons: { flexDirection: 'row', gap: 10, marginTop: 4 },
-  modalBtn: { flex: 1, paddingVertical: 12, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
-  modalCancelBtn: { backgroundColor: 'transparent', borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)' },
-  modalCancelText: { color: '#7a7a8c', fontWeight: '600' },
-  modalSaveBtn: { backgroundColor: ACCENT },
-  modalSaveText: { color: '#fff', fontWeight: '700' },
-
-  // ── Compile overlay ───────────────────────────────────────────────────────
-  compilingOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(11,11,14,0.88)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 16,
-  },
-  compilingText: { color: ACCENT_LIGHT, fontSize: 15, fontWeight: '600' },
 });

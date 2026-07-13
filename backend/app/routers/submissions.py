@@ -19,7 +19,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 
-from app.models.schemas import SubmissionRecord, SubmissionResponse, ExtractionResult, ValidationResult
+from app.models.schemas import SubmissionRecord, SubmissionResponse, ExtractionResult, ValidationResult, SetCreateRequest, SetResponse
 import logging
 
 logger = logging.getLogger(__name__)
@@ -68,7 +68,7 @@ def _ensure_uploads_dir() -> None:
 )
 async def create_submission(
     image: UploadFile = File(..., description="JPEG or PNG image of the booklet cover"),
-    session_id: str = Form(..., description="ID of the active batch scanning session"),
+    set_id: str = Form(..., description="ID of the destination scan set"),
     roi_x: Optional[float] = Form(None, description="Normalized X coordinate of the guide rectangle"),
     roi_y: Optional[float] = Form(None, description="Normalized Y coordinate of the guide rectangle"),
     roi_w: Optional[float] = Form(None, description="Normalized width of the guide rectangle"),
@@ -76,7 +76,7 @@ async def create_submission(
 ) -> SubmissionResponse:
     """
     Accept a multipart image upload, validate it, persist it to disk, and
-    return a submission record with a generated UUID. Also associates with a session_id
+    return a submission record with a generated UUID. Also associates with a set_id
     and registers in SQLite app.db database.
     """
     # ── 1. Validate content type ─────────────────────────────────────────────
@@ -125,9 +125,133 @@ async def create_submission(
         roi_h=roi_h,
     )
     from app.services.database import save_submission
-    save_submission(record, session_id)
+    save_submission(record, set_id)
 
     return SubmissionResponse(submission_id=submission_id, status="received")
+
+
+
+# ---------------------------------------------------------------------------
+# Durable Sets Management
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/sets",
+    status_code=status.HTTP_201_CREATED,
+    response_model=SetResponse,
+    summary="Create a new scan set",
+)
+async def create_new_set(payload: SetCreateRequest) -> SetResponse:
+    """
+    Creates a new named set for accumulating confirmed booklet submissions.
+    """
+    from app.services.database import create_set, get_set
+    set_id = str(uuid.uuid4())
+    create_set(set_id, payload.name)
+    set_data = get_set(set_id)
+    if not set_data:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve created set details."
+        )
+    return SetResponse(
+        set_id=set_data["set_id"],
+        name=set_data["name"],
+        created_at=set_data["created_at"],
+        status=set_data["status"],
+        row_count=0,
+    )
+
+
+@router.get(
+    "/sets",
+    response_model=list[SetResponse],
+    summary="List all scan sets",
+)
+async def get_sets_list() -> list[SetResponse]:
+    """
+    Returns all scan sets sorted by created_at DESC, including row count.
+    """
+    from app.services.database import list_sets
+    sets_data = list_sets()
+    return [
+        SetResponse(
+            set_id=s["set_id"],
+            name=s["name"],
+            created_at=s["created_at"],
+            status=s["status"],
+            row_count=s["row_count"],
+        )
+        for s in sets_data
+    ]
+
+
+@router.get(
+    "/sets/{set_id}/download",
+    summary="Download Excel spreadsheet for a specific set",
+)
+async def download_set_excel(set_id: str):
+    """
+    Serves the exports/{set_id}.xlsx file as a downloadable response.
+    """
+    from app.services.database import get_set
+    from fastapi.responses import FileResponse
+    from pathlib import Path
+    
+    set_data = get_set(set_id)
+    if not set_data:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Set not found"
+        )
+        
+    EXPORT_DIR = Path(__file__).parent.parent.parent / "exports"
+    set_file_path = EXPORT_DIR / f"{set_id}.xlsx"
+    
+    if not set_file_path.exists():
+        EXPORT_DIR.mkdir(parents=True, exist_ok=True)
+        from openpyxl import Workbook
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Marks Records"
+        ws.append([
+            "Name", "Roll No", "Branch", "Subject", "Date", 
+            "Marks Breakdown", "Total Marks", "Validation Status"
+        ])
+        wb.save(set_file_path)
+
+    sanitized_name = set_data["name"].replace("/", "_").replace("\\", "_")
+    return FileResponse(
+        path=str(set_file_path),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        filename=f"{sanitized_name}.xlsx",
+    )
+
+
+@router.get(
+    "/sets/{set_id}/status",
+    summary="Get status and details of a scan set",
+)
+async def get_set_status(set_id: str):
+    """
+    Returns metadata and count of confirmed booklets for a scan set.
+    """
+    from app.services.database import get_set, get_set_confirmed_count
+    set_data = get_set(set_id)
+    if not set_data:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Set not found"
+        )
+    count = get_set_confirmed_count(set_id)
+    return {
+        "set_id": set_id,
+        "name": set_data.get("name"),
+        "created_at": set_data.get("created_at"),
+        "status": set_data.get("status"),
+        "confirmed_count": count,
+    }
+
 
 
 @router.get(
@@ -482,98 +606,27 @@ async def update_extraction_result(submission_id: str, data: ExtractionResult) -
         except Exception as ex:
             logger.error(f"Failed to delete preprocessed image at {record.processed_image_path}: {ex}")
 
-    # Retrieve associated session_id to save
+    # Retrieve associated set_id to save
     conn = get_db_connection()
-    row = conn.execute("SELECT session_id FROM submissions WHERE submission_id = ?", (submission_id,)).fetchone()
-    session_id = row["session_id"] if row else "unknown"
+    row = conn.execute("SELECT set_id FROM submissions WHERE submission_id = ?", (submission_id,)).fetchone()
+    set_id = row["set_id"] if row else "unknown"
     conn.close()
 
     # Save to SQLite database
-    save_submission(record, session_id)
+    save_submission(record, set_id)
+
+    # Append row directly to set's spreadsheet exports/{set_id}.xlsx immediately
+    if set_id != "unknown":
+        from app.services.excel_export import append_row_to_set_excel
+        try:
+            append_row_to_set_excel(set_id, record)
+            record.export_status = "exported"
+            save_submission(record, set_id)
+        except Exception as e:
+            logger.error(f"Failed to append row to set Excel for set {set_id}: {e}")
+
     return record
 
-
-# ---------------------------------------------------------------------------
-# Phase 7 Session Management & Export Compilation
-# ---------------------------------------------------------------------------
-
-@router.get(
-    "/sessions/{session_id}/compile",
-    summary="Compile consolidated session Excel spreadsheet",
-)
-@router.post(
-    "/sessions/{session_id}/compile",
-    summary="Compile consolidated session Excel spreadsheet",
-)
-async def compile_session_export(session_id: str):
-    """
-    Compiles all confirmed submissions associated with session_id into a single
-    consolidated spreadsheet exports/{session_id}.xlsx and returns it.
-    """
-    from app.services.database import get_session_submissions
-    from app.services.excel_export import compile_session_to_excel
-    from fastapi.responses import FileResponse
-
-    # Load all confirmed booklets in this session
-    confirmed_records = get_session_submissions(session_id, confirmed_only=True)
-    if not confirmed_records:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Cannot compile session spreadsheet: no confirmed booklets found in this session.",
-        )
-
-    try:
-        session_file_path = compile_session_to_excel(session_id, confirmed_records)
-    except Exception as e:
-        logger.error(f"Session spreadsheet compilation failed for {session_id}: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to generate consolidated spreadsheet: {str(e)}",
-        )
-
-    return FileResponse(
-        path=session_file_path,
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        filename=f"session_{session_id}.xlsx",
-    )
-
-
-@router.get(
-    "/sessions/{session_id}/submissions/count",
-    summary="Get count of confirmed booklets in this scan session",
-)
-async def get_session_confirmed_count(session_id: str):
-    """
-    Returns the count of booklets confirmed/saved so far in this session.
-    """
-    from app.services.database import get_confirmed_count
-    count = get_confirmed_count(session_id)
-    return {"confirmed_count": count}
-
-
-@router.get(
-    "/sessions/{session_id}/status",
-    summary="Get status and details of a scan session",
-)
-async def get_session_status(session_id: str):
-    """
-    Returns metadata and count of confirmed booklets for a scan session.
-    """
-    from app.services.database import get_session, get_confirmed_count
-    session = get_session(session_id)
-    if not session:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Session not found"
-        )
-    count = get_confirmed_count(session_id)
-    return {
-        "session_id": session_id,
-        "name": session.get("name"),
-        "created_at": session.get("created_at"),
-        "status": session.get("status"),
-        "confirmed_count": count,
-    }
 
 
 
