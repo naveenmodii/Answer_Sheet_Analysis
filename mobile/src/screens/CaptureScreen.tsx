@@ -84,6 +84,11 @@ export default function CaptureScreen({ navigation }: Props) {
       const filePath = await photo.saveToTemporaryFileAsync();
       photo.dispose(); // free native memory; temp file stays on disk
 
+      // Determine the actual orientation loaded by ImageManipulator.
+      // If the photo is landscape (width > height), it will be auto-transposed to portrait on load.
+      const actualWidth = photoWidth > photoHeight ? photoHeight : photoWidth;
+      const actualHeight = photoWidth > photoHeight ? photoWidth : photoHeight;
+
       // ── On-Device Cropping ─────────────────────────────────────────────────
       // Calculate normalized Region of Interest (ROI) from camera visual guide coordinates
       const roi_x = (SCREEN_W - GUIDE_W) / 2 / SCREEN_W;
@@ -91,20 +96,22 @@ export default function CaptureScreen({ navigation }: Props) {
       const roi_w = GUIDE_W / SCREEN_W;
       const roi_h = GUIDE_H / SCREEN_H;
 
-      // Map normalized coordinates to pixel coordinates on the captured image
-      const px = roi_x * photoWidth;
-      const py = roi_y * photoHeight;
-      const pw = roi_w * photoWidth;
-      const ph = roi_h * photoHeight;
+      // Map normalized coordinates to pixel coordinates on the transposed image
+      const px = roi_x * actualWidth;
+      const py = roi_y * actualHeight;
+      const pw = roi_w * actualWidth;
+      const ph = roi_h * actualHeight;
 
       // Apply a 15% padding margin (consistent with backend preprocessor margins)
       const margin_x = pw * 0.15;
       const margin_y = ph * 0.15;
 
-      const originX = Math.max(0, Math.floor(px - margin_x));
-      const originY = Math.max(0, Math.floor(py - margin_y));
-      const width = Math.min(photoWidth - originX, Math.floor(pw + 2 * margin_x));
-      const height = Math.min(photoHeight - originY, Math.floor(ph + 2 * margin_y));
+      // Calculate pixel integer coordinates and clamp them strictly to ensure
+      // they never exceed actual bounds (preventing renderAsync crashes)
+      const originX = Math.max(0, Math.min(actualWidth - 1, Math.floor(px - margin_x)));
+      const originY = Math.max(0, Math.min(actualHeight - 1, Math.floor(py - margin_y)));
+      const width = Math.max(1, Math.min(actualWidth - originX, Math.floor(pw + 2 * margin_x)));
+      const height = Math.max(1, Math.min(actualHeight - originY, Math.floor(ph + 2 * margin_y)));
 
       // Crop the image to guide box + margin bounds
       const cropResult = await ImageManipulator.manipulateAsync(
