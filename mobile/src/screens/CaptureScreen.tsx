@@ -18,7 +18,11 @@ import {
   StyleSheet,
   Text,
   View,
+  Alert,
 } from 'react-native';
+import * as FileSystem from 'expo-file-system';
+import * as Sharing from 'expo-sharing';
+import { API_BASE_URL } from '../config';
 import {
   Camera,
   useCameraDevice,
@@ -57,6 +61,44 @@ export default function CaptureScreen({ navigation }: Props) {
       requestPermission();
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Share Excel spreadsheet action (Phase 6) ────────────────────────────────
+  const handleShareSpreadsheet = async () => {
+    try {
+      const localUri = `${FileSystem.cacheDirectory || FileSystem.documentDirectory}marks.xlsx`;
+
+      const downloadResult = await FileSystem.downloadAsync(
+        `${API_BASE_URL}/submissions/export/download`,
+        localUri
+      );
+
+      if (downloadResult.status !== 200) {
+        Alert.alert(
+          'Spreadsheet Unavailable',
+          'No consolidated spreadsheet has been generated yet. Please process and save at least one student booklet first.'
+        );
+        return;
+      }
+
+      const isAvailable = await Sharing.isAvailableAsync();
+      if (!isAvailable) {
+        Alert.alert('Sharing Unavailable', 'Native sharing is not supported on this device.');
+        return;
+      }
+
+      await Sharing.shareAsync(downloadResult.uri, {
+        mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        dialogTitle: 'Share Consolidated Booklet Marks Spreadsheet',
+        UTI: 'org.openxmlformats.spreadsheetml.sheet',
+      });
+    } catch (err) {
+      console.error('Failed to download or share spreadsheet:', err);
+      Alert.alert(
+        'Download Error',
+        'Could not fetch or share the marks spreadsheet. Ensure your backend is running and you have scanned booklets.'
+      );
+    }
+  };
 
   // ── Capture handler (v5 API) ───────────────────────────────────────────────
   const handleCapture = useCallback(async () => {
@@ -240,6 +282,20 @@ export default function CaptureScreen({ navigation }: Props) {
         </Text>
       </View>
 
+      {/* Excel Download & Share button */}
+      <View style={styles.shareSheetContainer}>
+        <Pressable
+          style={({ pressed }) => [
+            styles.shareSheetButton,
+            pressed && styles.buttonPressed,
+          ]}
+          onPress={handleShareSpreadsheet}
+          accessibilityLabel="Share consolidated Excel marks sheet"
+        >
+          <Text style={styles.shareSheetButtonText}>📊 Export sheet</Text>
+        </Pressable>
+      </View>
+
       {/* Shutter button */}
       <View style={styles.shutterContainer}>
         <Pressable
@@ -419,5 +475,36 @@ const styles = StyleSheet.create({
     height: 52,
     borderRadius: 26,
     backgroundColor: '#fff',
+  },
+
+  // ── Share Sheet Export Styles ─────────────────────────────────────────────
+  shareSheetContainer: {
+    position: 'absolute',
+    top: 54,
+    right: 16,
+    zIndex: 10,
+  },
+  shareSheetButton: {
+    backgroundColor: '#10b981',
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+    borderRadius: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 3,
+    elevation: 4,
+  },
+  shareSheetButtonText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  buttonPressed: {
+    opacity: 0.8,
+    transform: [{ scale: 0.96 }],
   },
 });
