@@ -1,3 +1,4 @@
+/**
  * CaptureScreen — Phase 1
  *
  * Shows a full-screen live camera preview via react-native-vision-camera v5.
