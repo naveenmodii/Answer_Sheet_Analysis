@@ -80,6 +80,7 @@ export default function DashboardScreen({ navigation }: Props) {
   };
 
   const handleShareSession = async (session: SessionMetadata) => {
+    let tempUri: string | null = null;
     try {
       const fileInfo = await FileSystem.getInfoAsync(session.localFilePath);
       if (!fileInfo.exists) {
@@ -96,7 +97,18 @@ export default function DashboardScreen({ navigation }: Props) {
         return;
       }
 
-      await Sharing.shareAsync(session.localFilePath, {
+      // 1. Sanitize the user-assigned custom session name for safe filename usage
+      const sanitizedName = session.name.replace(/[\/\\?%*:|"<>\s]+/g, '_');
+      tempUri = `${FileSystem.cacheDirectory}${sanitizedName}.xlsx`;
+
+      // 2. Make a temporary copy with the user-assigned custom name
+      await FileSystem.copyAsync({
+        from: session.localFilePath,
+        to: tempUri,
+      });
+
+      // 3. Share the custom named copy instead of session_{id}.xlsx
+      await Sharing.shareAsync(tempUri, {
         mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         dialogTitle: `Share marks for ${session.name}`,
         UTI: 'org.openxmlformats.spreadsheetml.sheet',
@@ -104,6 +116,15 @@ export default function DashboardScreen({ navigation }: Props) {
     } catch (err) {
       console.error('Failed to share session spreadsheet:', err);
       Alert.alert('Share Error', 'Could not open native sharing options.');
+    } finally {
+      // 4. Safely delete the temporary renamed copy from cache
+      if (tempUri) {
+        try {
+          await FileSystem.deleteAsync(tempUri, { idempotent: true });
+        } catch (cleanupErr) {
+          console.warn('Failed to clean up temporary share spreadsheet file:', cleanupErr);
+        }
+      }
     }
   };
 
