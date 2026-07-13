@@ -361,12 +361,11 @@ export default function ReviewScreen({ route, navigation }: Props) {
             {prepStatus === 'fallback' && (
               <View style={styles.fallbackNotice}>
                 <View style={styles.alertHeader}>
-                  <Text style={styles.alertIcon}>⚠️</Text>
-                  <Text style={styles.fallbackTitle}>Auto-Crop Unsuccessful</Text>
+                  <Text style={styles.alertIcon}>📸</Text>
+                  <Text style={styles.fallbackTitle}>Guide Cropped & Enhanced</Text>
                 </View>
                 <Text style={styles.fallbackBody}>
-                  Booklet edges couldn't be detected (Reason: {prepDebugReason || 'no_contour'}).
-                  We are using the original photo.
+                  Booklet was cropped to the guide frame. Deskew and contrast optimized.
                 </Text>
               </View>
             )}
