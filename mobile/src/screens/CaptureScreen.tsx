@@ -89,29 +89,57 @@ export default function CaptureScreen({ navigation }: Props) {
       const actualWidth = photoWidth > photoHeight ? photoHeight : photoWidth;
       const actualHeight = photoWidth > photoHeight ? photoWidth : photoHeight;
 
-      // ── On-Device Cropping ─────────────────────────────────────────────────
-      // Calculate normalized Region of Interest (ROI) from camera visual guide coordinates
-      const roi_x = (SCREEN_W - GUIDE_W) / 2 / SCREEN_W;
-      const roi_y = (SCREEN_H - GUIDE_H) / 2 / SCREEN_H;
-      const roi_w = GUIDE_W / SCREEN_W;
-      const roi_h = GUIDE_H / SCREEN_H;
+      // ── Field of View (FOV) Offset Mapping ──────────────────────────────────
+      // The camera preview renders full-screen with style StyleSheet.absoluteFill,
+      // which defaults to resizeMode="cover". This means the preview centers and
+      // crops the raw sensor image along the axis that is too long relative to the
+      // screen's aspect ratio.
+      //
+      // Because capturePhoto() returns the uncropped, full-sensor field of view,
+      // mapping screen-percentages directly to the photo yields incorrect crop coordinates.
+      // We must calculate the scale and offset factor to map visual bounds to sensor coordinates.
+      const previewWidth = SCREEN_W;
+      const previewHeight = SCREEN_H;
 
-      // Map normalized coordinates to pixel coordinates on the transposed image
-      const px = roi_x * actualWidth;
-      const py = roi_y * actualHeight;
-      const pw = roi_w * actualWidth;
-      const ph = roi_h * actualHeight;
+      // Log preview vs photo metadata to verify aspect ratio mismatch
+      console.log(`[SIPAR FOV Debug] Screen Preview size: ${previewWidth}x${previewHeight} (Aspect: ${(previewWidth/previewHeight).toFixed(3)})`);
+      console.log(`[SIPAR FOV Debug] Camera Preview resizeMode: cover (default)`);
+      console.log(`[SIPAR FOV Debug] Sensor Photo raw size: ${photoWidth}x${photoHeight}`);
+      console.log(`[SIPAR FOV Debug] Transposed Photo size: ${actualWidth}x${actualHeight} (Aspect: ${(actualWidth/actualHeight).toFixed(3)})`);
+
+      // Fit photo aspect ratio to preview aspect ratio using "cover" scale factor
+      const scale = Math.max(previewWidth / actualWidth, previewHeight / actualHeight);
+      const renderedWidth = actualWidth * scale;
+      const renderedHeight = actualHeight * scale;
+
+      // Offset of the screen layout container relative to the centered rendered photo bounds
+      const offsetX = (renderedWidth - previewWidth) / 2;
+      const offsetY = (renderedHeight - previewHeight) / 2;
+
+      console.log(`[SIPAR FOV Debug] Scale factor: ${scale.toFixed(4)}, Offsets: X=${offsetX.toFixed(1)}, Y=${offsetY.toFixed(1)}`);
+
+      // Screen guide top-left coordinates in layout pixels
+      const guide_screen_x = (previewWidth - GUIDE_W) / 2;
+      const guide_screen_y = (previewHeight - GUIDE_H) / 2;
+
+      // Translate screen coordinates to original transposed photo pixels
+      const photo_x = (guide_screen_x + offsetX) / scale;
+      const photo_y = (guide_screen_y + offsetY) / scale;
+      const photo_w = GUIDE_W / scale;
+      const photo_h = GUIDE_H / scale;
 
       // Apply a 15% padding margin (consistent with backend preprocessor margins)
-      const margin_x = pw * 0.15;
-      const margin_y = ph * 0.15;
+      const margin_x = photo_w * 0.15;
+      const margin_y = photo_h * 0.15;
 
       // Calculate pixel integer coordinates and clamp them strictly to ensure
       // they never exceed actual bounds (preventing renderAsync crashes)
-      const originX = Math.max(0, Math.min(actualWidth - 1, Math.floor(px - margin_x)));
-      const originY = Math.max(0, Math.min(actualHeight - 1, Math.floor(py - margin_y)));
-      const width = Math.max(1, Math.min(actualWidth - originX, Math.floor(pw + 2 * margin_x)));
-      const height = Math.max(1, Math.min(actualHeight - originY, Math.floor(ph + 2 * margin_y)));
+      const originX = Math.max(0, Math.min(actualWidth - 1, Math.floor(photo_x - margin_x)));
+      const originY = Math.max(0, Math.min(actualHeight - 1, Math.floor(photo_y - margin_y)));
+      const width = Math.max(1, Math.min(actualWidth - originX, Math.floor(photo_w + 2 * margin_x)));
+      const height = Math.max(1, Math.min(actualHeight - originY, Math.floor(photo_h + 2 * margin_y)));
+
+      console.log(`[SIPAR FOV Debug] Calculated Crop Bounds: originX=${originX}, originY=${originY}, width=${width}, height=${height}`);
 
       // Crop the image to guide box + margin bounds
       const cropResult = await ImageManipulator.manipulateAsync(
