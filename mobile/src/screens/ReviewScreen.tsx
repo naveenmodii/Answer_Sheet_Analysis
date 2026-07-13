@@ -103,7 +103,7 @@ interface SubmissionRecord {
 }
 
 export default function ReviewScreen({ route, navigation }: Props) {
-  const { imageUri } = route.params;
+  const { imageUri, sessionId } = route.params;
 
   const [flowState, setFlowState] = useState<FlowState>('idle');
   const [submissionId, setSubmissionId] = useState<string | null>(null);
@@ -157,6 +157,7 @@ export default function ReviewScreen({ route, navigation }: Props) {
         name: filename,
         type: mimeType,
       } as unknown as Blob);
+      formData.append('session_id', sessionId); // Send Phase 7 active session association!
 
       const uploadResponse = await axios.post<{ submission_id: string; status: string }>(
         `${API_BASE_URL}/submissions`,
@@ -196,7 +197,7 @@ export default function ReviewScreen({ route, navigation }: Props) {
       setErrorMessage(detail);
       setFlowState('error');
     }
-  }, [imageUri]);
+  }, [imageUri, sessionId]);
 
   // ── Claude Vision Extraction Handler (Phase 3) ─────────────────────────────
   const handleExtractDetails = useCallback(async () => {
@@ -354,25 +355,6 @@ export default function ReviewScreen({ route, navigation }: Props) {
   const handleConfirmAndSave = async () => {
     if (!submissionId) return;
 
-    const executeExport = async () => {
-      setFlowState('uploading');
-      try {
-        await axios.post(`${API_BASE_URL}/submissions/${submissionId}/export`);
-        navigation.popToTop();
-      } catch (err) {
-        console.error('Export failed:', err);
-        setFlowState('extracted');
-        Alert.alert(
-          'Export Failed',
-          'Booklet details saved successfully, but appending to the Excel sheet failed. Would you like to retry spreadsheet export?',
-          [
-            { text: 'Cancel / Exit', onPress: () => navigation.popToTop() },
-            { text: 'Retry Export', onPress: executeExport },
-          ]
-        );
-      }
-    };
-
     const saveAction = async () => {
       setFlowState('uploading'); // displays loading indicators
       try {
@@ -400,8 +382,8 @@ export default function ReviewScreen({ route, navigation }: Props) {
           payload
         );
 
-        // Put succeeded! Now perform Excel row appending
-        await executeExport();
+        // Put succeeded and backend disk cleanup has run! Return to Capture batch session.
+        navigation.navigate('Capture', { sessionId });
       } catch (err) {
         console.error('Save failed:', err);
         setErrorMessage('Failed to save booklet updates.');

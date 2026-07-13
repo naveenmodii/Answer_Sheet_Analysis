@@ -19,7 +19,10 @@ import {
   Text,
   View,
   Alert,
+  Modal,
+  TextInput,
 } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import { API_BASE_URL } from '../config';
@@ -31,6 +34,7 @@ import {
 } from 'react-native-vision-camera';
 import * as Haptics from 'expo-haptics';
 import * as ImageManipulator from 'expo-image-manipulator';
+import axios from 'axios';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/AppNavigator';
 
@@ -44,7 +48,8 @@ const GUIDE_H = GUIDE_W * 1.414;
 const CORNER_SIZE = 20;
 const CORNER_THICKNESS = 3;
 
-export default function CaptureScreen({ navigation }: Props) {
+export default function CaptureScreen({ route, navigation }: Props) {
+  const { sessionId } = route.params;
   const { hasPermission, requestPermission } = useCameraPermission();
   const device = useCameraDevice('back');
 
@@ -55,6 +60,12 @@ export default function CaptureScreen({ navigation }: Props) {
 
   const [capturing, setCapturing] = useState(false);
 
+  // ── Phase 7 Session Tracking States ────────────────────────────────────────
+  const [confirmedCount, setConfirmedCount] = useState(0);
+  const [finishModalVisible, setFinishModalVisible] = useState(false);
+  const [sessionNameText, setSessionNameText] = useState('');
+  const [compiling, setCompiling] = useState(false);
+
   // ── Permission request on mount ────────────────────────────────────────────
   useEffect(() => {
     if (!hasPermission) {
@@ -62,41 +73,101 @@ export default function CaptureScreen({ navigation }: Props) {
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Share Excel spreadsheet action (Phase 6) ────────────────────────────────
-  const handleShareSpreadsheet = async () => {
-    try {
-      const localUri = `${FileSystem.cacheDirectory || FileSystem.documentDirectory}marks.xlsx`;
+  // ── Sync booklet count from server when screen gains focus ─────────────────
+  useFocusEffect(
+    useCallback(() => {
+      let isActive = true;
+      const fetchCount = async () => {
+        try {
+          const response = await axios.get<{ confirmed_count: number }>(
+            `${API_BASE_URL}/submissions/sessions/${sessionId}/submissions/count`
+          );
+          if (isActive) {
+            setConfirmedCount(response.data.confirmed_count);
+          }
+        } catch (err) {
+          console.warn('Failed to query session submissions count:', err);
+        }
+      };
+      fetchCount();
+      return () => {
+        isActive = false;
+      };
+    }, [sessionId])
+  );
 
+  const handleFinishSession = () => {
+    if (confirmedCount === 0) {
+      // Teacher backed out without scanning any booklets. Do not create an empty session.
+      Alert.alert(
+        'Empty Session',
+        'No student booklets were confirmed in this session. Return to Dashboard?',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Yes, Exit', onPress: () => navigation.popToTop() },
+        ]
+      );
+      return;
+    }
+
+    // Pre-fill default name: "Exam Batch - YYYY-MM-DD HH:MM"
+    const now = new Date();
+    const dateStr = now.toISOString().split('T')[0] ?? '';
+    const timeStr = now.toTimeString().split(' ')[0]?.substring(0, 5) ?? '';
+    setSessionNameText(`Scan Session ${dateStr} ${timeStr}`);
+    setFinishModalVisible(true);
+  };
+
+  const handleConfirmFinish = async () => {
+    if (!sessionNameText.trim()) return;
+
+    try {
+      setCompiling(true);
+      setFinishModalVisible(false);
+
+      // 1. Trigger POST compile on server
+      const localFilePath = `${FileSystem.documentDirectory}session_${sessionId}.xlsx`;
       const downloadResult = await FileSystem.downloadAsync(
-        `${API_BASE_URL}/submissions/export/download`,
-        localUri
+        `${API_BASE_URL}/submissions/sessions/${sessionId}/compile`,
+        localFilePath
       );
 
       if (downloadResult.status !== 200) {
-        Alert.alert(
-          'Spreadsheet Unavailable',
-          'No consolidated spreadsheet has been generated yet. Please process and save at least one student booklet first.'
-        );
-        return;
+        throw new Error('Server compile returned status ' + downloadResult.status);
       }
 
-      const isAvailable = await Sharing.isAvailableAsync();
-      if (!isAvailable) {
-        Alert.alert('Sharing Unavailable', 'Native sharing is not supported on this device.');
-        return;
+      // 2. Read existing sessions.json library
+      const sessionsFileUri = `${FileSystem.documentDirectory}sessions.json`;
+      let sessionLibrary = [];
+      const info = await FileSystem.getInfoAsync(sessionsFileUri);
+      if (info.exists) {
+        const content = await FileSystem.readAsStringAsync(sessionsFileUri);
+        sessionLibrary = JSON.parse(content);
       }
 
-      await Sharing.shareAsync(downloadResult.uri, {
-        mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        dialogTitle: 'Share Consolidated Booklet Marks Spreadsheet',
-        UTI: 'org.openxmlformats.spreadsheetml.sheet',
-      });
+      // 3. Append new session metadata
+      const newSessionMetadata = {
+        sessionId,
+        name: sessionNameText.trim(),
+        createdAt: new Date().toISOString(),
+        rowCount: confirmedCount,
+        localFilePath: localFilePath,
+      };
+      sessionLibrary.push(newSessionMetadata);
+
+      // 4. Save back metadata library
+      await FileSystem.writeAsStringAsync(sessionsFileUri, JSON.stringify(sessionLibrary));
+
+      // 5. Navigate back to Dashboard home
+      navigation.popToTop();
     } catch (err) {
-      console.error('Failed to download or share spreadsheet:', err);
+      console.error('Session export compilation failed:', err);
       Alert.alert(
-        'Download Error',
-        'Could not fetch or share the marks spreadsheet. Ensure your backend is running and you have scanned booklets.'
+        'Compilation Failed',
+        'Failed to compile or download session Excel spreadsheet. Please make sure your server is running.'
       );
+    } finally {
+      setCompiling(false);
     }
   };
 
@@ -199,14 +270,14 @@ export default function CaptureScreen({ navigation }: Props) {
         { compress: 0.9, format: ImageManipulator.SaveFormat.JPEG }
       );
 
-      // Navigate to Review with the pre-cropped local file URI
-      navigation.navigate('Review', { imageUri: cropResult.uri });
+      // Navigate to Review with the pre-cropped local file URI and active session ID
+      navigation.navigate('Review', { imageUri: cropResult.uri, sessionId });
     } catch (err) {
       console.error('Capture failed:', err);
     } finally {
       setCapturing(false);
     }
-  }, [capturing, photoOutput, navigation]);
+  }, [capturing, photoOutput, navigation, sessionId]);
 
   // ── Permission denied ──────────────────────────────────────────────────────
   if (!hasPermission) {
@@ -250,6 +321,51 @@ export default function CaptureScreen({ navigation }: Props) {
         outputs={[photoOutput]}
       />
 
+      {/* Top Session Navigation Header */}
+      <View style={styles.topHeader}>
+        <Pressable
+          style={({ pressed }) => [
+            styles.headerBackBtn,
+            pressed && styles.buttonPressed,
+          ]}
+          onPress={() => {
+            if (confirmedCount > 0) {
+              Alert.alert(
+                'Exit Scan Session',
+                'You have scanned booklets in this active batch. Exit and discard them?',
+                [
+                  { text: 'Cancel', style: 'cancel' },
+                  { text: 'Exit & Discard', style: 'destructive', onPress: () => navigation.popToTop() }
+                ]
+              );
+            } else {
+              navigation.popToTop();
+            }
+          }}
+          accessibilityLabel="Back to Dashboard library"
+        >
+          <Text style={styles.headerBackText}>↩ Dashboard</Text>
+        </Pressable>
+
+        <View style={styles.headerTitleWrap}>
+          <Text style={styles.headerTitle}>Active scan</Text>
+          <Text style={styles.headerSub}>
+            {confirmedCount === 0 ? '0 booklets' : `${confirmedCount} booklet${confirmedCount === 1 ? '' : 's'} saved`}
+          </Text>
+        </View>
+
+        <Pressable
+          style={({ pressed }) => [
+            styles.headerFinishBtn,
+            pressed && styles.buttonPressed,
+          ]}
+          onPress={handleFinishSession}
+          accessibilityLabel="Finish active scanning batch"
+        >
+          <Text style={styles.headerFinishText}>Finish</Text>
+        </Pressable>
+      </View>
+
       {/* Dark vignette overlay with transparent cut-out guide */}
       <View style={styles.overlay} pointerEvents="none">
         {/* Top dark band */}
@@ -282,20 +398,6 @@ export default function CaptureScreen({ navigation }: Props) {
         </Text>
       </View>
 
-      {/* Excel Download & Share button */}
-      <View style={styles.shareSheetContainer}>
-        <Pressable
-          style={({ pressed }) => [
-            styles.shareSheetButton,
-            pressed && styles.buttonPressed,
-          ]}
-          onPress={handleShareSpreadsheet}
-          accessibilityLabel="Share consolidated Excel marks sheet"
-        >
-          <Text style={styles.shareSheetButtonText}>📊 Export sheet</Text>
-        </Pressable>
-      </View>
-
       {/* Shutter button */}
       <View style={styles.shutterContainer}>
         <Pressable
@@ -304,7 +406,7 @@ export default function CaptureScreen({ navigation }: Props) {
             pressed && styles.shutterOuterPressed,
           ]}
           onPress={handleCapture}
-          disabled={capturing}
+          disabled={capturing || compiling}
           accessibilityLabel="Take photo"
         >
           {capturing ? (
@@ -314,6 +416,53 @@ export default function CaptureScreen({ navigation }: Props) {
           )}
         </Pressable>
       </View>
+
+      {/* Naming Popup Modal */}
+      <Modal
+        visible={finishModalVisible}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setFinishModalVisible(false)}
+      >
+        <View style={styles.modalBg}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Name Scan Batch</Text>
+            <Text style={styles.modalDesc}>
+              Assign a name to this scanned batch before compiling the consolidated Excel marks sheet.
+            </Text>
+            <TextInput
+              style={styles.modalInput}
+              value={sessionNameText}
+              onChangeText={setSessionNameText}
+              placeholder="e.g. Maths Test Section A"
+              placeholderTextColor="#64748b"
+              maxLength={40}
+            />
+            <View style={styles.modalButtons}>
+              <Pressable
+                style={[styles.modalBtn, styles.modalCancelBtn]}
+                onPress={() => setFinishModalVisible(false)}
+              >
+                <Text style={styles.modalCancelText}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.modalBtn, styles.modalSaveBtn]}
+                onPress={handleConfirmFinish}
+              >
+                <Text style={styles.modalSaveText}>Compile & Finish</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Compilation Spinner Overlay */}
+      {compiling && (
+        <View style={styles.compilingOverlay}>
+          <ActivityIndicator size="large" color="#6366f1" />
+          <Text style={styles.compilingText}>Compiling Excel spreadsheet…</Text>
+        </View>
+      )}
     </View>
   );
 }
@@ -477,34 +626,147 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff',
   },
 
-  // ── Share Sheet Export Styles ─────────────────────────────────────────────
-  shareSheetContainer: {
+  // ── Phase 7 Session UI Styles ──────────────────────────────────────────────
+  topHeader: {
     position: 'absolute',
-    top: 54,
-    right: 16,
-    zIndex: 10,
-  },
-  shareSheetButton: {
-    backgroundColor: '#10b981',
-    paddingHorizontal: 14,
-    paddingVertical: 9,
-    borderRadius: 20,
+    top: 50,
+    left: 0,
+    right: 0,
+    height: 56,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    zIndex: 10,
+  },
+  headerBackBtn: {
+    backgroundColor: 'rgba(30, 30, 58, 0.75)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 18,
+  },
+  headerBackText: {
+    color: '#a5b4fc',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  headerTitleWrap: {
+    alignItems: 'center',
+  },
+  headerTitle: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+  },
+  headerSub: {
+    color: '#818cf8',
+    fontSize: 11,
+    fontWeight: '600',
+    marginTop: 2,
+  },
+  headerFinishBtn: {
+    backgroundColor: '#6366f1',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 18,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.3,
     shadowRadius: 3,
     elevation: 4,
   },
-  shareSheetButtonText: {
+  headerFinishText: {
     color: '#fff',
     fontSize: 12,
     fontWeight: '700',
   },
   buttonPressed: {
-    opacity: 0.8,
+    opacity: 0.82,
     transform: [{ scale: 0.96 }],
+  },
+
+  /* Modals */
+  modalBg: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.65)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  modalContent: {
+    width: '100%',
+    backgroundColor: '#1e1e38',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    borderRadius: 20,
+    padding: 20,
+    gap: 16,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#f8fafc',
+    textAlign: 'center',
+  },
+  modalDesc: {
+    fontSize: 13,
+    color: '#94a3b8',
+    textAlign: 'center',
+    lineHeight: 18,
+  },
+  modalInput: {
+    backgroundColor: 'rgba(0,0,0,0.2)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    color: '#f8fafc',
+    fontSize: 14,
+  },
+  modalButtons: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 4,
+  },
+  modalBtn: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modalCancelBtn: {
+    backgroundColor: 'rgba(255,255,255,0.03)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+  },
+  modalCancelText: {
+    color: '#cbd5e1',
+    fontWeight: '600',
+  },
+  modalSaveBtn: {
+    backgroundColor: '#6366f1',
+  },
+  modalSaveText: {
+    color: '#fff',
+    fontWeight: '700',
+  },
+
+  /* Compiling spinner overlay */
+  compilingOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(15, 15, 26, 0.85)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 16,
+  },
+  compilingText: {
+    color: '#a5b4fc',
+    fontSize: 16,
+    fontWeight: '600',
   },
 });
