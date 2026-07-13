@@ -551,6 +551,32 @@ async def get_session_confirmed_count(session_id: str):
     return {"confirmed_count": count}
 
 
+@router.get(
+    "/sessions/{session_id}/status",
+    summary="Get status and details of a scan session",
+)
+async def get_session_status(session_id: str):
+    """
+    Returns metadata and count of confirmed booklets for a scan session.
+    """
+    from app.services.database import get_session, get_confirmed_count
+    session = get_session(session_id)
+    if not session:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Session not found"
+        )
+    count = get_confirmed_count(session_id)
+    return {
+        "session_id": session_id,
+        "name": session.get("name"),
+        "created_at": session.get("created_at"),
+        "status": session.get("status"),
+        "confirmed_count": count,
+    }
+
+
+
 
 
 

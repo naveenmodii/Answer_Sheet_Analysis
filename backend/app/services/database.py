@@ -247,3 +247,16 @@ def get_confirmed_count(session_id: str) -> int:
     count = cursor.fetchone()[0]
     conn.close()
     return count
+
+
+def get_session(session_id: str) -> Optional[dict]:
+    """Retrieves session details by session_id."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM sessions WHERE session_id = ?", (session_id,))
+    row = cursor.fetchone()
+    conn.close()
+    if row:
+        return dict(row)
+    return None
+

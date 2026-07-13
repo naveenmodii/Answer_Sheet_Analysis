@@ -143,6 +143,14 @@ export default function CaptureScreen({ route, navigation }: Props) {
         localFilePath,
       });
       await FileSystem.writeAsStringAsync(sessionsFileUri, JSON.stringify(sessionLibrary));
+      
+      try {
+        const activeSessionUri = `${FileSystem.documentDirectory}active_session.json`;
+        await FileSystem.deleteAsync(activeSessionUri, { idempotent: true });
+      } catch (err) {
+        console.warn('Failed to clear active session file:', err);
+      }
+
       navigation.popToTop();
     } catch (err) {
       console.error('Session export compilation failed:', err);
@@ -260,17 +268,27 @@ export default function CaptureScreen({ route, navigation }: Props) {
         <Pressable
           style={({ pressed }) => [styles.headerBackBtn, pressed && styles.buttonPressed]}
           onPress={() => {
+            const clearActiveSessionAndGoBack = async () => {
+              try {
+                const activeSessionUri = `${FileSystem.documentDirectory}active_session.json`;
+                await FileSystem.deleteAsync(activeSessionUri, { idempotent: true });
+              } catch (err) {
+                console.warn('Failed to clear active session file:', err);
+              }
+              navigation.popToTop();
+            };
+
             if (confirmedCount > 0) {
               Alert.alert(
                 'Exit Scan Session',
                 'You have scanned booklets in this active batch. Exit and discard them?',
                 [
                   { text: 'Cancel', style: 'cancel' },
-                  { text: 'Exit & Discard', style: 'destructive', onPress: () => navigation.popToTop() },
+                  { text: 'Exit & Discard', style: 'destructive', onPress: clearActiveSessionAndGoBack },
                 ]
               );
             } else {
-              navigation.popToTop();
+              clearActiveSessionAndGoBack();
             }
           }}
           accessibilityLabel="Back to Dashboard library"

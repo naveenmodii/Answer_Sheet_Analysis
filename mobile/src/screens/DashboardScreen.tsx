@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   ScrollView,
@@ -14,8 +14,11 @@ import Feather from '@expo/vector-icons/Feather';
 import { useFocusEffect } from '@react-navigation/native';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
+import axios from 'axios';
+import { API_BASE_URL } from '../config';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/AppNavigator';
+
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Dashboard'>;
 
@@ -37,6 +40,37 @@ export default function DashboardScreen({ navigation }: Props) {
   const [renameNameText, setRenameNameText] = useState('');
 
   const sessionsFileUri = `${FileSystem.documentDirectory}sessions.json`;
+  const activeSessionFileUri = `${FileSystem.documentDirectory}active_session.json`;
+
+  useEffect(() => {
+    const checkActiveSession = async () => {
+      try {
+        const info = await FileSystem.getInfoAsync(activeSessionFileUri);
+        if (info.exists) {
+          const content = await FileSystem.readAsStringAsync(activeSessionFileUri);
+          const { sessionId } = JSON.parse(content);
+          if (sessionId) {
+            // Verify session is active/exists on backend
+            try {
+              const res = await axios.get(
+                `${API_BASE_URL}/submissions/sessions/${sessionId}/status`
+              );
+              if (res.data) {
+                // Auto-resume scan session UI
+                navigation.navigate('Capture', { sessionId });
+              }
+            } catch (err) {
+              console.warn('Active session verification failed, clearing local file:', err);
+              await FileSystem.deleteAsync(activeSessionFileUri, { idempotent: true });
+            }
+          }
+        }
+      } catch (err) {
+        console.error('Failed to verify active session on launch:', err);
+      }
+    };
+    checkActiveSession();
+  }, [navigation]);
 
   const loadSessions = useCallback(async () => {
     try {
@@ -68,13 +102,22 @@ export default function DashboardScreen({ navigation }: Props) {
     }, [loadSessions])
   );
 
-  const handleCreateNewSession = () => {
+  const handleCreateNewSession = async () => {
     const sessionUuid =
       Math.random().toString(36).substring(2, 11) +
       '-' +
       Math.random().toString(36).substring(2, 11);
+    try {
+      await FileSystem.writeAsStringAsync(
+        activeSessionFileUri,
+        JSON.stringify({ sessionId: sessionUuid })
+      );
+    } catch (err) {
+      console.warn('Failed to persist active session ID locally:', err);
+    }
     navigation.navigate('Capture', { sessionId: sessionUuid });
   };
+
 
   const handleShareSession = async (session: SessionMetadata) => {
     let tempUri: string | null = null;
