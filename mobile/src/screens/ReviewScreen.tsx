@@ -106,27 +106,28 @@ interface SubmissionRecord {
   validation_result?: ValidationResult;
 }
 
-// ── Mulyank dark warm palette ─────────────────────────────────────────────────
-const BG          = '#1C1210';   // near-black charcoal
-const SURFACE     = '#2A1B17';   // warm dark brown card
-const PANEL_BG    = '#231511';   // panel bg
-const BORDER      = '#3D2820';   // subtle warm border
-const ACCENT      = '#C1440E';   // deep terracotta
-const TEXT        = '#F5E9DD';   // warm off-white
-const TEXT_MUTED  = '#B9A99C';   // warm grey-taupe
-const MUTED       = '#7A5A50';   // darker muted
-const SUCCESS_BG   = 'rgba(22,163,74,0.1)';
-const SUCCESS_BORDER = 'rgba(22,163,74,0.3)';
+// ── Cool violet/dark modern aesthetic ──────────────────────────────────────────
+const BG          = '#0A0A0F';   // near-black, cool undertone
+const SURFACE     = '#14141F';   // card/surface background
+const PANEL_BG    = '#1A1A2A';   // panel bg
+const BORDER      = '#2A2A3D';   // subtle 1px border for glassmorphic look
+const ACCENT      = '#8B7FFF';   // violet accent
+const TEXT        = '#F1F1F5';   // near-white
+const TEXT_MUTED  = '#8888A0';   // grey-taupe
+const MUTED       = '#4E4E6A';   // darker muted text
+const SUCCESS_BG   = 'rgba(74,222,128,0.1)';
+const SUCCESS_BORDER = 'rgba(74,222,128,0.3)';
 const SUCCESS_TEXT   = '#4ade80';
-const WARN_BG     = 'rgba(234,88,12,0.1)';
-const WARN_BORDER  = 'rgba(234,88,12,0.3)';
+const WARN_BG     = 'rgba(251,146,60,0.1)';
+const WARN_BORDER  = 'rgba(251,146,60,0.3)';
 const WARN_TEXT    = '#fb923c';
 const DANGER_BG   = 'rgba(220,38,38,0.1)';
 const DANGER_BORDER = 'rgba(220,38,38,0.3)';
 const DANGER_TEXT   = '#f87171';
-const INFO_BG     = 'rgba(232,163,61,0.08)';
-const INFO_BORDER  = 'rgba(232,163,61,0.25)';
-const INFO_TEXT    = '#E8A33D';
+const INFO_BG     = 'rgba(139,127,255,0.08)';
+const INFO_BORDER  = 'rgba(139,127,255,0.25)';
+const INFO_TEXT    = '#8B7FFF';
+
 
 export default function ReviewScreen({ route, navigation }: Props) {
   const { imageUri, setId } = route.params;
@@ -1048,7 +1049,7 @@ const styles = StyleSheet.create({
     borderColor: BORDER,
   },
   secondaryButtonText: { color: TEXT_MUTED, fontSize: 14, fontWeight: '600' },
-  primaryButton: { backgroundColor: '#E8A33D' },
-  primaryButtonText: { color: '#1C1210', fontSize: 15, fontWeight: '700' },
-  confirmButton: { backgroundColor: '#E8A33D' },
+  primaryButton: { backgroundColor: '#8B7FFF' },
+  primaryButtonText: { color: '#0A0A0F', fontSize: 15, fontWeight: '700' },
+  confirmButton: { backgroundColor: '#8B7FFF' },
 });

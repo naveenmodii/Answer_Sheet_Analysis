@@ -99,4 +99,8 @@ Thumbs.db
 *.ntvs*
 *.njsproj
 *.sln
-*.sw?
+# ─── Databases ────────────────────────────────────────────────────────────────
+backend/data/*.db
+backend/data/**/*.db
+*.db
+

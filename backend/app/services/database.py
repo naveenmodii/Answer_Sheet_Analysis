@@ -10,7 +10,14 @@ from datetime import datetime, timezone
 from app.models.schemas import SubmissionRecord, ExtractionResult, ValidationResult
 
 DB_DIR = Path(__file__).parent.parent.parent / "data"
-DB_FILE = DB_DIR / "app.db"
+
+# Database separation: use environment variable DATABASE_PATH if set (e.g. during local tests)
+# otherwise fall back to standard data/app.db (used in production on Render).
+DATABASE_PATH_ENV = os.environ.get("DATABASE_PATH")
+if DATABASE_PATH_ENV:
+    DB_FILE = Path(DATABASE_PATH_ENV)
+else:
+    DB_FILE = DB_DIR / "app.db"
 
 
 def init_db():

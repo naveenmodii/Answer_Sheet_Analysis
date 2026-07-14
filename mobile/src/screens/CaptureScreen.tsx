@@ -40,11 +40,11 @@ const GUIDE_H = GUIDE_W * 1.414;
 const CORNER_SIZE = 20;
 const CORNER_THICKNESS = 3;
 
-// ── Mulyank dark warm palette ─────────────────────────────────────────────────
-const ACCENT       = '#C1440E';   // deep terracotta
-const ACCENT_LIGHT = '#E8A33D';   // marigold-gold
-const MUTED        = '#B9A99C';   // warm grey-taupe
-const TEXT_BODY    = '#F5E9DD';   // warm off-white
+// ── Cool violet/dark modern aesthetic ──────────────────────────────────────────
+const ACCENT       = '#8B7FFF';   // violet
+const ACCENT_LIGHT = '#E0C3FC';   // lavender
+const MUTED        = '#8888A0';   // grey-taupe
+const TEXT_BODY    = '#F1F1F5';   // near-white
 
 export default function CaptureScreen({ route, navigation }: Props) {
   const { setId } = route.params;
@@ -315,14 +315,14 @@ const styles = StyleSheet.create({
     width: GUIDE_W,
     height: GUIDE_H,
     borderWidth: 1.5,
-    borderColor: 'rgba(255,200,150,0.45)',
+    borderColor: 'rgba(139,127,255,0.4)',
     position: 'relative',
   },
   corner: {
     position: 'absolute',
     width: CORNER_SIZE,
     height: CORNER_SIZE,
-    borderColor: '#FFC96E',
+    borderColor: '#8B7FFF',
   },
   cornerTL: { top: -CORNER_THICKNESS / 2, left: -CORNER_THICKNESS / 2, borderTopWidth: CORNER_THICKNESS, borderLeftWidth: CORNER_THICKNESS },
   cornerTR: { top: -CORNER_THICKNESS / 2, right: -CORNER_THICKNESS / 2, borderTopWidth: CORNER_THICKNESS, borderRightWidth: CORNER_THICKNESS },
@@ -330,7 +330,7 @@ const styles = StyleSheet.create({
   cornerBR: { bottom: -CORNER_THICKNESS / 2, right: -CORNER_THICKNESS / 2, borderBottomWidth: CORNER_THICKNESS, borderRightWidth: CORNER_THICKNESS },
 
   hintContainer: { position: 'absolute', top: OVERLAY_VERT - 36, left: 0, right: 0, alignItems: 'center' },
-  hintText: { color: 'rgba(255,220,170,0.85)', fontSize: 13, letterSpacing: 0.3 },
+  hintText: { color: 'rgba(224,195,252,0.85)', fontSize: 13, letterSpacing: 0.3 },
 
   shutterContainer: { position: 'absolute', bottom: 48, left: 0, right: 0, alignItems: 'center' },
   shutterOuter: {
@@ -343,7 +343,7 @@ const styles = StyleSheet.create({
     borderWidth: 4,
     borderColor: 'rgba(255,255,255,0.4)',
   },
-  shutterOuterPressed: { transform: [{ scale: 0.94 }], backgroundColor: 'rgba(255,200,110,0.9)' },
+  shutterOuterPressed: { transform: [{ scale: 0.94 }], backgroundColor: 'rgba(139,127,255,0.7)' },
   shutterInner: { width: 52, height: 52, borderRadius: 26, backgroundColor: '#fff' },
 
   topHeader: {
@@ -373,6 +373,6 @@ const styles = StyleSheet.create({
   headerBackText: { color: ACCENT_LIGHT, fontSize: 12, fontWeight: '600' },
   headerTitleWrap: { alignItems: 'center', flex: 1 },
   headerTitle: { color: '#fff', fontSize: 13, fontWeight: '700', letterSpacing: 0.5, maxWidth: 160, textAlign: 'center' },
-  headerSub: { color: 'rgba(200,200,255,0.6)', fontSize: 11, fontWeight: '500', marginTop: 2 },
+  headerSub: { color: 'rgba(224,195,252,0.7)', fontSize: 11, fontWeight: '500', marginTop: 2 },
   buttonPressed: { opacity: 0.82, transform: [{ scale: 0.96 }] },
 });

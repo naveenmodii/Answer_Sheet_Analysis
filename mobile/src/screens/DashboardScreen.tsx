@@ -15,6 +15,8 @@ import { useFocusEffect } from '@react-navigation/native';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import axios from 'axios';
+import MaskedView from '@react-native-masked-view/masked-view';
+import { LinearGradient } from 'expo-linear-gradient';
 import { API_BASE_URL } from '../config';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/AppNavigator';
@@ -37,16 +39,14 @@ interface SetRowRecord {
   validation_status: string;
 }
 
-// ── Mulyank dark warm palette ─────────────────────────────────────────────────
-const BG        = '#1C1210';   // near-black warm charcoal
-const SURFACE   = '#2A1B17';   // warm dark brown card
-const BORDER    = '#3D2820';   // subtle warm border
-const PRIMARY   = '#C1440E';   // deep terracotta
-const CTA       = '#E8A33D';   // marigold-gold
-const CTA_TEXT  = '#1C1210';   // dark on gold for contrast
-const TEXT      = '#F5E9DD';   // warm off-white
-const MUTED     = '#B9A99C';   // warm grey-taupe
-const DANGER    = '#e05a5a';
+// ── Cool violet/dark modern aesthetic ──────────────────────────────────────────
+const BG        = '#0A0A0F';   // near-black, cool undertone
+const SURFACE   = '#14141F';   // card/surface background
+const BORDER    = '#2A2A3D';   // subtle 1px border for glassmorphic look
+const ACCENT    = '#8B7FFF';   // violet accent
+const TEXT      = '#F1F1F5';   // near-white
+const MUTED     = '#8888A0';   // warm grey-taupe
+const DANGER    = '#FF6B6B';   // custom red for delete button
 
 export default function DashboardScreen({ navigation }: Props) {
   const [sets, setSets] = useState<SetMetadata[]>([]);
@@ -180,6 +180,27 @@ export default function DashboardScreen({ navigation }: Props) {
     );
   };
 
+  const handleDownloadSetSpreadsheet = async (set: SetMetadata) => {
+    try {
+      setLoading(true);
+      const filename = `${set.name.replace(/[\/\\?%*:|"<>\s]+/g, '_')}_report.xlsx`;
+      const localUri = `${FileSystem.documentDirectory}${filename}`;
+      const downloadResult = await FileSystem.downloadAsync(
+        `${API_BASE_URL}/submissions/sets/${set.set_id}/download`,
+        localUri
+      );
+      if (downloadResult.status !== 200) {
+        throw new Error('Server download returned status ' + downloadResult.status);
+      }
+      Alert.alert('Download Complete', `Saved to app directory as:\n${filename}`);
+    } catch (err) {
+      console.error('Failed to download set spreadsheet:', err);
+      Alert.alert('Download Error', 'Could not download the set spreadsheet.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleShareSetSpreadsheet = async (set: SetMetadata) => {
     let localUri: string | null = null;
     let tempUri: string | null = null;
@@ -229,18 +250,39 @@ export default function DashboardScreen({ navigation }: Props) {
 
   return (
     <View style={styles.root}>
-      {/* ── Clean dark header — no pattern, no icon ── */}
+      {/* ── Center Header with Gradient Title ── */}
       <View style={styles.header}>
-        <Text style={styles.appTitle}>Mulyank</Text>
+        <View style={styles.titleContainer}>
+          <MaskedView
+            style={styles.maskedView}
+            maskElement={<Text style={styles.appTitle}>Mulyank</Text>}
+          >
+            <LinearGradient
+              colors={['#E0C3FC', '#8B7FFF']}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 0 }}
+              style={StyleSheet.absoluteFill}
+            />
+          </MaskedView>
+        </View>
         <Text style={styles.appSub}>Answer Sheet Evaluation</Text>
       </View>
 
       <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
-        <Text style={styles.sectionLabel}>SCAN SETS</Text>
+        {/* Centered section label with violet underline */}
+        <View style={styles.sectionHeader}>
+          <Text style={styles.sectionLabel}>SCAN SETS</Text>
+          <LinearGradient
+            colors={['#E0C3FC', '#8B7FFF']}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 0 }}
+            style={styles.sectionUnderline}
+          />
+        </View>
 
         {loading && sets.length === 0 ? (
           <View style={styles.centerWrap}>
-            <ActivityIndicator size="large" color={CTA} />
+            <ActivityIndicator size="large" color={ACCENT} />
           </View>
         ) : sets.length === 0 ? (
           <View style={styles.emptyCard}>
@@ -253,7 +295,7 @@ export default function DashboardScreen({ navigation }: Props) {
               style={({ pressed }) => [styles.ctaBtn, pressed && styles.btnPressed]}
               onPress={handleOpenCreateModal}
             >
-              <Feather name="plus" size={16} color={CTA_TEXT} style={styles.btnIcon} />
+              <Feather name="plus" size={16} color="#0A0A0F" style={styles.btnIcon} />
               <Text style={styles.ctaBtnText}>New Scan Set</Text>
             </Pressable>
           </View>
@@ -277,28 +319,41 @@ export default function DashboardScreen({ navigation }: Props) {
 
               <View style={styles.divider} />
 
+              {/* Action row with side-by-side Download/Share & compact Eye/Trash */}
               <View style={styles.actionRow}>
-                <Pressable
-                  style={({ pressed }) => [styles.ctaBtn, styles.ctaBtnFlex, pressed && styles.btnPressed]}
-                  onPress={() => handleShareSetSpreadsheet(item)}
-                >
-                  <Feather name="share-2" size={14} color={CTA_TEXT} style={styles.btnIcon} />
-                  <Text style={styles.ctaBtnText}>Download & Share</Text>
-                </Pressable>
+                <View style={styles.btnCol}>
+                  <Pressable
+                    style={({ pressed }) => [styles.glassBtn, pressed && styles.btnPressed]}
+                    onPress={() => handleDownloadSetSpreadsheet(item)}
+                  >
+                    <Feather name="download" size={13} color={ACCENT} style={styles.btnIcon} />
+                    <Text style={styles.glassBtnText}>Download</Text>
+                  </Pressable>
 
-                <Pressable
-                  style={({ pressed }) => [styles.iconBtn, pressed && styles.btnPressed]}
-                  onPress={() => handleViewRows(item)}
-                >
-                  <Feather name="eye" size={16} color={CTA} />
-                </Pressable>
+                  <Pressable
+                    style={({ pressed }) => [styles.glassBtn, pressed && styles.btnPressed]}
+                    onPress={() => handleShareSetSpreadsheet(item)}
+                  >
+                    <Feather name="share-2" size={13} color={ACCENT} style={styles.btnIcon} />
+                    <Text style={styles.glassBtnText}>Share</Text>
+                  </Pressable>
+                </View>
 
-                <Pressable
-                  style={({ pressed }) => [styles.iconBtn, styles.deleteBtnStyle, pressed && styles.btnPressed]}
-                  onPress={() => handleDeleteSet(item)}
-                >
-                  <Feather name="trash-2" size={16} color={DANGER} />
-                </Pressable>
+                <View style={styles.iconCol}>
+                  <Pressable
+                    style={({ pressed }) => [styles.iconBtn, pressed && styles.btnPressed]}
+                    onPress={() => handleViewRows(item)}
+                  >
+                    <Feather name="eye" size={15} color={ACCENT} />
+                  </Pressable>
+
+                  <Pressable
+                    style={({ pressed }) => [styles.iconBtn, styles.deleteBtnStyle, pressed && styles.btnPressed]}
+                    onPress={() => handleDeleteSet(item)}
+                  >
+                    <Feather name="trash-2" size={15} color={DANGER} />
+                  </Pressable>
+                </View>
               </View>
             </View>
           ))
@@ -309,7 +364,7 @@ export default function DashboardScreen({ navigation }: Props) {
             style={({ pressed }) => [styles.ctaBtn, { marginTop: 8 }, pressed && styles.btnPressed]}
             onPress={handleOpenCreateModal}
           >
-            <Feather name="plus" size={16} color={CTA_TEXT} style={styles.btnIcon} />
+            <Feather name="plus" size={16} color="#0A0A0F" style={styles.btnIcon} />
             <Text style={styles.ctaBtnText}>New Scan Set</Text>
           </Pressable>
         )}
@@ -355,7 +410,7 @@ export default function DashboardScreen({ navigation }: Props) {
             </View>
 
             {viewRowsLoading ? (
-              <ActivityIndicator size="large" color={CTA} style={{ marginVertical: 32 }} />
+              <ActivityIndicator size="large" color={ACCENT} style={{ marginVertical: 32 }} />
             ) : viewRowsList.length === 0 ? (
               <Text style={styles.noRowsText}>No confirmed booklet entries in this set yet.</Text>
             ) : (
@@ -398,34 +453,55 @@ const styles = StyleSheet.create({
   header: {
     paddingTop: 56,
     paddingBottom: 20,
-    paddingHorizontal: 20,
     backgroundColor: SURFACE,
     borderBottomWidth: 1,
     borderBottomColor: BORDER,
+    alignItems: 'center',
+  },
+  titleContainer: {
+    height: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 4,
+  },
+  maskedView: {
+    width: 150,
+    height: '100%',
   },
   appTitle: {
-    fontSize: 26,
-    fontWeight: '800',
-    color: CTA,
-    letterSpacing: 0.4,
+    fontSize: 28,
+    fontWeight: '900',
+    color: '#000000',
+    textAlign: 'center',
+    letterSpacing: 0.5,
   },
   appSub: {
     fontSize: 12,
     color: MUTED,
-    marginTop: 3,
     fontWeight: '500',
     letterSpacing: 0.4,
+    textAlign: 'center',
   },
 
   // ── Scroll ──────────────────────────────────────────────────────────────────
   scroll: { flex: 1 },
   scrollContent: { padding: 20, paddingBottom: 56, gap: 12 },
+  sectionHeader: {
+    alignItems: 'center',
+    marginVertical: 12,
+  },
   sectionLabel: {
     fontSize: 11,
     fontWeight: '700',
     color: MUTED,
     letterSpacing: 1.4,
-    marginBottom: 4,
+    textAlign: 'center',
+  },
+  sectionUnderline: {
+    width: 40,
+    height: 2,
+    borderRadius: 1,
+    marginTop: 6,
   },
   centerWrap: { paddingVertical: 64, alignItems: 'center' },
 
@@ -448,67 +524,86 @@ const styles = StyleSheet.create({
     backgroundColor: SURFACE,
     borderWidth: 1,
     borderColor: BORDER,
-    borderRadius: 14,
+    borderRadius: 16,
     padding: 16,
     gap: 12,
   },
   cardTop: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'flex-start',
+    alignItems: 'center',
     gap: 12,
   },
   metaCol: { flex: 1, gap: 4 },
   cardName: { fontSize: 15, fontWeight: '600', color: TEXT },
   cardDate: { fontSize: 12, color: MUTED },
   rowBadge: {
-    backgroundColor: `${PRIMARY}20`,
+    backgroundColor: '#1E1E2E',
+    borderWidth: 1,
+    borderColor: BORDER,
     paddingHorizontal: 10,
     paddingVertical: 4,
     borderRadius: 8,
-    borderWidth: 1,
-    borderColor: `${PRIMARY}40`,
   },
-  rowBadgeText: { color: CTA, fontSize: 12, fontWeight: '600' },
+  rowBadgeText: { color: '#A78BFA', fontSize: 11, fontWeight: '600' },
   divider: { height: 1, backgroundColor: BORDER },
 
   // ── Actions ──────────────────────────────────────────────────────────────────
-  actionRow: { flexDirection: 'row', gap: 8, alignItems: 'center' },
-  btnIcon: { marginRight: 5 },
-
-  ctaBtn: {
+  actionRow: {
     flexDirection: 'row',
-    backgroundColor: CTA,
-    paddingVertical: 11,
-    paddingHorizontal: 20,
-    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  btnCol: {
+    flex: 1,
+    flexDirection: 'row',
+    gap: 6,
+  },
+  iconCol: {
+    flexDirection: 'row',
+    gap: 6,
+  },
+  glassBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    backgroundColor: '#1E1E2E',
+    borderWidth: 1,
+    borderColor: BORDER,
+    borderRadius: 8,
+    paddingVertical: 9,
+    paddingHorizontal: 4,
     alignItems: 'center',
     justifyContent: 'center',
-    minHeight: 44,
+    minHeight: 38,
   },
-  ctaBtnFlex: { flex: 1 },
-  ctaBtnText: { color: CTA_TEXT, fontSize: 13, fontWeight: '700' },
+  glassBtnText: {
+    color: '#8B7FFF',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  btnIcon: { marginRight: 4 },
   btnPressed: { opacity: 0.8, transform: [{ scale: 0.97 }] },
 
   iconBtn: {
-    width: 36,
-    height: 36,
-    backgroundColor: `${PRIMARY}15`,
+    width: 38,
+    height: 38,
+    backgroundColor: '#1E1E2E',
     borderWidth: 1,
     borderColor: BORDER,
-    borderRadius: 9,
+    borderRadius: 8,
     alignItems: 'center',
     justifyContent: 'center',
   },
   deleteBtnStyle: {
-    backgroundColor: 'rgba(224,90,90,0.08)',
-    borderColor: 'rgba(224,90,90,0.2)',
+    borderColor: 'rgba(255, 107, 107, 0.3)',
+    backgroundColor: '#1E1E2E',
   },
 
   // ── Modals ───────────────────────────────────────────────────────────────────
   modalBg: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.7)',
+    backgroundColor: 'rgba(0,0,0,0.85)',
     justifyContent: 'center',
     alignItems: 'center',
     padding: 24,
@@ -545,8 +640,8 @@ const styles = StyleSheet.create({
   },
   modalCancelBtn: { backgroundColor: 'transparent', borderWidth: 1, borderColor: BORDER },
   modalCancelText: { color: MUTED, fontWeight: '600', fontSize: 14 },
-  modalSaveBtn: { backgroundColor: CTA },
-  modalSaveText: { color: CTA_TEXT, fontWeight: '700', fontSize: 14 },
+  modalSaveBtn: { backgroundColor: ACCENT },
+  modalSaveText: { color: '#0A0A0F', fontWeight: '700', fontSize: 14 },
 
   // ── Table ─────────────────────────────────────────────────────────────────────
   noRowsText: { color: MUTED, fontSize: 13, textAlign: 'center', paddingVertical: 32 },
@@ -574,6 +669,19 @@ const styles = StyleSheet.create({
     borderRadius: 4,
     overflow: 'hidden',
   },
-  valValid: { backgroundColor: 'rgba(22,163,74,0.15)', color: '#4ade80' },
-  valMismatch: { backgroundColor: 'rgba(234,88,12,0.15)', color: '#fb923c' },
+  valValid: { backgroundColor: 'rgba(74,222,128,0.15)', color: '#4ade80' },
+  valMismatch: { backgroundColor: 'rgba(251,146,60,0.15)', color: '#fb923c' },
+
+  // ── CTA Button ──────────────────────────────────────────────────────────────
+  ctaBtn: {
+    flexDirection: 'row',
+    backgroundColor: ACCENT,
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 46,
+  },
+  ctaBtnText: { color: '#0A0A0F', fontSize: 14, fontWeight: '700' },
 });
