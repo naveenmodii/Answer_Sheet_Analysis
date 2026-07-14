@@ -25,8 +25,8 @@ export default function AppNavigator() {
       <Stack.Navigator
         initialRouteName="Dashboard"
         screenOptions={{
-          headerStyle: { backgroundColor: '#7A2422' },
-          headerTintColor: '#FDF6EA',
+          headerStyle: { backgroundColor: '#2A1B17' },
+          headerTintColor: '#E8A33D',
           headerTitleStyle: { fontWeight: '700' },
           headerBackTitleVisible: false,
         }}

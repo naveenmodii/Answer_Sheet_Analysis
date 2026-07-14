@@ -40,11 +40,11 @@ const GUIDE_H = GUIDE_W * 1.414;
 const CORNER_SIZE = 20;
 const CORNER_THICKNESS = 3;
 
-// ── Design tokens ─────────────────────────────────────────────────────────────
-const ACCENT       = '#7A2422';   // Mulyank primary maroon
-const ACCENT_LIGHT = '#FFC96E';   // warm gold
-const MUTED        = '#9A7B6E';
-const TEXT_BODY    = '#FDF6EA';   // warm ivory
+// ── Mulyank dark warm palette ─────────────────────────────────────────────────
+const ACCENT       = '#C1440E';   // deep terracotta
+const ACCENT_LIGHT = '#E8A33D';   // marigold-gold
+const MUTED        = '#B9A99C';   // warm grey-taupe
+const TEXT_BODY    = '#F5E9DD';   // warm off-white
 
 export default function CaptureScreen({ route, navigation }: Props) {
   const { setId } = route.params;

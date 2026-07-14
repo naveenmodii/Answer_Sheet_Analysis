@@ -106,27 +106,27 @@ interface SubmissionRecord {
   validation_result?: ValidationResult;
 }
 
-// ── Mulyank design tokens ─────────────────────────────────────────────────────
-const BG          = '#FDF6EA';   // warm ivory
-const SURFACE     = '#FFFFFF';
-const PANEL_BG    = '#FBF0DF';
-const BORDER      = '#E8D8C8';
-const ACCENT      = '#7A2422';   // maroon primary
-const TEXT        = '#3A1F1A';   // warm dark brown
-const TEXT_MUTED  = '#9A7B6E';
-const MUTED       = '#B8998C';
-const SUCCESS_BG   = 'rgba(22,163,74,0.07)';
-const SUCCESS_BORDER = 'rgba(22,163,74,0.25)';
-const SUCCESS_TEXT   = '#16a34a';
-const WARN_BG     = 'rgba(234,88,12,0.07)';
-const WARN_BORDER  = 'rgba(234,88,12,0.25)';
-const WARN_TEXT    = '#ea580c';
-const DANGER_BG   = 'rgba(220,38,38,0.07)';
-const DANGER_BORDER = 'rgba(220,38,38,0.25)';
-const DANGER_TEXT   = '#dc2626';
-const INFO_BG     = 'rgba(122,36,34,0.06)';
-const INFO_BORDER  = 'rgba(122,36,34,0.2)';
-const INFO_TEXT    = '#7A2422';
+// ── Mulyank dark warm palette ─────────────────────────────────────────────────
+const BG          = '#1C1210';   // near-black charcoal
+const SURFACE     = '#2A1B17';   // warm dark brown card
+const PANEL_BG    = '#231511';   // panel bg
+const BORDER      = '#3D2820';   // subtle warm border
+const ACCENT      = '#C1440E';   // deep terracotta
+const TEXT        = '#F5E9DD';   // warm off-white
+const TEXT_MUTED  = '#B9A99C';   // warm grey-taupe
+const MUTED       = '#7A5A50';   // darker muted
+const SUCCESS_BG   = 'rgba(22,163,74,0.1)';
+const SUCCESS_BORDER = 'rgba(22,163,74,0.3)';
+const SUCCESS_TEXT   = '#4ade80';
+const WARN_BG     = 'rgba(234,88,12,0.1)';
+const WARN_BORDER  = 'rgba(234,88,12,0.3)';
+const WARN_TEXT    = '#fb923c';
+const DANGER_BG   = 'rgba(220,38,38,0.1)';
+const DANGER_BORDER = 'rgba(220,38,38,0.3)';
+const DANGER_TEXT   = '#f87171';
+const INFO_BG     = 'rgba(232,163,61,0.08)';
+const INFO_BORDER  = 'rgba(232,163,61,0.25)';
+const INFO_TEXT    = '#E8A33D';
 
 export default function ReviewScreen({ route, navigation }: Props) {
   const { imageUri, setId } = route.params;
@@ -1048,7 +1048,7 @@ const styles = StyleSheet.create({
     borderColor: BORDER,
   },
   secondaryButtonText: { color: TEXT_MUTED, fontSize: 14, fontWeight: '600' },
-  primaryButton: { backgroundColor: '#7A2422' },
-  primaryButtonText: { color: '#FDF6EA', fontSize: 15, fontWeight: '700' },
-  confirmButton: { backgroundColor: '#FFC96E' },
+  primaryButton: { backgroundColor: '#E8A33D' },
+  primaryButtonText: { color: '#1C1210', fontSize: 15, fontWeight: '700' },
+  confirmButton: { backgroundColor: '#E8A33D' },
 });
