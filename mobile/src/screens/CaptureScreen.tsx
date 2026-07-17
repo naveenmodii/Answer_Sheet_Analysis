@@ -4,7 +4,7 @@
  * Shows a full-screen live camera preview via react-native-vision-camera v5.
  * Captures booklet cover images and navigates to ReviewScreen.
  */
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Dimensions,
@@ -54,6 +54,7 @@ export default function CaptureScreen({ route, navigation }: Props) {
   const photoOutput = usePhotoOutput({ qualityPrioritization: 'quality' });
 
   const [capturing, setCapturing] = useState(false);
+  const capturingRef = useRef(false);
   const [setName, setSetName] = useState('Active Set');
   const [confirmedCount, setConfirmedCount] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -106,22 +107,31 @@ export default function CaptureScreen({ route, navigation }: Props) {
     }, [setId, navigation])
   );
 
-  // ── Capture handler (v5 API) ──────────────────────────────────────────────
+  // ── Capture handler (v5 API — direct-to-disk + dimensions query) ───────────
   const handleCapture = useCallback(async () => {
-    if (capturing) return;
+    if (capturingRef.current) return;
     try {
+      capturingRef.current = true;
       setCapturing(true);
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
 
-      const photo = await photoOutput.capturePhoto(
+      // Use capturePhotoToFile to write JPEG direct to disk on native side (saves memory)
+      const photoFile = await photoOutput.capturePhotoToFile(
         { flashMode: 'off', enableShutterSound: false },
         {}
       );
 
-      const photoWidth = photo.width;
-      const photoHeight = photo.height;
-      const filePath = await photo.saveToTemporaryFileAsync();
-      photo.dispose();
+      const filePath = photoFile.filePath;
+
+      // Query image dimensions from disk file via empty manipulation query
+      const info = await ImageManipulator.manipulateAsync(
+        `file://${filePath}`,
+        [],
+        { compress: 1.0, format: ImageManipulator.SaveFormat.JPEG }
+      );
+
+      const photoWidth = info.width;
+      const photoHeight = info.height;
 
       const actualWidth = photoWidth > photoHeight ? photoHeight : photoWidth;
       const actualHeight = photoWidth > photoHeight ? photoWidth : photoHeight;
@@ -154,7 +164,7 @@ export default function CaptureScreen({ route, navigation }: Props) {
       const height = Math.max(1, Math.min(actualHeight - originY, Math.floor(photo_h + 2 * margin_y)));
 
       const cropResult = await ImageManipulator.manipulateAsync(
-        filePath,
+        `file://${filePath}`,
         [{ crop: { originX, originY, width, height } }],
         { compress: 0.9, format: ImageManipulator.SaveFormat.JPEG }
       );
@@ -163,9 +173,10 @@ export default function CaptureScreen({ route, navigation }: Props) {
     } catch (err) {
       console.error('Capture failed:', err);
     } finally {
+      capturingRef.current = false;
       setCapturing(false);
     }
-  }, [capturing, photoOutput, navigation, setId]);
+  }, [photoOutput, navigation, setId]);
 
   // ── Permission denied ────────────────────────────────────────────────────
   if (!hasPermission) {
