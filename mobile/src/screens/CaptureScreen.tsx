@@ -107,7 +107,7 @@ export default function CaptureScreen({ route, navigation }: Props) {
     }, [setId, navigation])
   );
 
-  // ── Capture handler (v5 API — direct-to-disk + dimensions query) ───────────
+  // ── Capture handler (v5 API — direct-to-disk + pre-rotation + safe crop bounds) ──
   const handleCapture = useCallback(async () => {
     if (capturingRef.current) return;
     try {
@@ -121,25 +121,39 @@ export default function CaptureScreen({ route, navigation }: Props) {
         {}
       );
 
-      const filePath = photoFile.filePath;
+      const rawFilePath = photoFile.filePath;
+      let finalUri = `file://${rawFilePath}`;
 
       // Query image dimensions from disk file via empty manipulation query
       const info = await ImageManipulator.manipulateAsync(
-        `file://${filePath}`,
+        finalUri,
         [],
         { compress: 1.0, format: ImageManipulator.SaveFormat.JPEG }
       );
 
-      const photoWidth = info.width;
-      const photoHeight = info.height;
+      let photoWidth = info.width;
+      let photoHeight = info.height;
 
-      const actualWidth = photoWidth > photoHeight ? photoHeight : photoWidth;
-      const actualHeight = photoWidth > photoHeight ? photoWidth : photoHeight;
+      // If the sensor image is landscape, force-rotate it 90 degrees to make it portrait.
+      // This aligns the actual bitmap memory bounds with our portrait crop math.
+      if (photoWidth > photoHeight) {
+        const rotationResult = await ImageManipulator.manipulateAsync(
+          finalUri,
+          [{ rotate: 90 }],
+          { compress: 0.95, format: ImageManipulator.SaveFormat.JPEG }
+        );
+        finalUri = rotationResult.uri;
+        photoWidth = rotationResult.width;
+        photoHeight = rotationResult.height;
+      }
+
+      const actualWidth = photoWidth;
+      const actualHeight = photoHeight;
 
       const previewWidth = SCREEN_W;
       const previewHeight = SCREEN_H;
 
-      console.log(`[ASA FOV Debug] Screen: ${previewWidth}x${previewHeight}, Sensor: ${photoWidth}x${photoHeight}`);
+      console.log(`[ASA FOV Debug] Screen: ${previewWidth}x${previewHeight}, Image: ${actualWidth}x${actualHeight}`);
 
       const scale = Math.max(previewWidth / actualWidth, previewHeight / actualHeight);
       const renderedWidth = actualWidth * scale;
@@ -158,14 +172,22 @@ export default function CaptureScreen({ route, navigation }: Props) {
       const margin_x = photo_w * 0.05;
       const margin_y = photo_h * 0.05;
 
-      const originX = Math.max(0, Math.min(actualWidth - 1, Math.floor(photo_x - margin_x)));
-      const originY = Math.max(0, Math.min(actualHeight - 1, Math.floor(photo_y - margin_y)));
-      const width = Math.max(1, Math.min(actualWidth - originX, Math.floor(photo_w + 2 * margin_x)));
-      const height = Math.max(1, Math.min(actualHeight - originY, Math.floor(photo_h + 2 * margin_y)));
+      const calculatedX = Math.floor(photo_x - margin_x);
+      const calculatedY = Math.floor(photo_y - margin_y);
+      const calculatedW = Math.floor(photo_w + 2 * margin_x);
+      const calculatedH = Math.floor(photo_h + 2 * margin_y);
+
+      // Strictly clamp coordinates to avoid any out-of-bounds crop exception on native layer
+      const cropX = Math.max(0, Math.min(actualWidth - 1, calculatedX));
+      const cropY = Math.max(0, Math.min(actualHeight - 1, calculatedY));
+      const cropW = Math.max(1, Math.min(actualWidth - cropX, calculatedW));
+      const cropH = Math.max(1, Math.min(actualHeight - cropY, calculatedH));
+
+      console.log(`[ASA Crop Clamp] origin: (${cropX}, ${cropY}), size: ${cropW}x${cropH} (image: ${actualWidth}x${actualHeight})`);
 
       const cropResult = await ImageManipulator.manipulateAsync(
-        `file://${filePath}`,
-        [{ crop: { originX, originY, width, height } }],
+        finalUri,
+        [{ crop: { originX: cropX, originY: cropY, width: cropW, height: cropH } }],
         { compress: 0.9, format: ImageManipulator.SaveFormat.JPEG }
       );
 
