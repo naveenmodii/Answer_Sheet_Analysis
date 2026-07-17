@@ -170,8 +170,9 @@ export default function CaptureScreen({ route, navigation }: Props) {
       );
 
       navigation.navigate('Review', { imageUri: cropResult.uri, setId });
-    } catch (err) {
+    } catch (err: any) {
       console.error('Capture failed:', err);
+      Alert.alert('Capture Error', err?.message || String(err));
     } finally {
       capturingRef.current = false;
       setCapturing(false);
